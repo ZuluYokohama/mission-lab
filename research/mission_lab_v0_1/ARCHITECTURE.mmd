@@ -1,0 +1,17 @@
+flowchart TD
+    A[Mission, goal, constraints, artifact identities] --> V[Runtime schema and boundary validation]
+    V --> O[Observe metadata or retained run evidence]
+    O --> K[Orient: explicit knowledge, uncertainty, cost origin]
+    K --> D[Decide: bounded DAG scheduling heuristic]
+    D --> P[Fresh immutable plan and input hashes]
+    P --> X[Act: registered operators in own Python worker]
+    X --> E[Observed outputs, timings, reservations, failures]
+    E --> G[Verify digest agreement and goal predicates]
+    G --> M[Assemble result manifest and evidence chain]
+    E --> R[Replan with new resource revision]
+    R --> D
+    M --> Q[Offline evidence replay]
+    U[Package fixtures] --> I[Metadata-only bounded inventory]
+    I --> O
+    X -. worker and read-buffer reservation bounds .-> B[Controller checks]
+    B --> G

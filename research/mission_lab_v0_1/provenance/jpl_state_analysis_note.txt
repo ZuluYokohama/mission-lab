@@ -1,0 +1,6 @@
+NASA JPL: System Engineering / State Analysis
+Source: https://www.jpl.nasa.gov/work-with-us/technology-system/mds/system-engineering/
+
+Design interpretation: distinguish the state being controlled, its observations, goals and executable actions. This project is an independent adaptation and has no NASA, JPL or Caltech endorsement.
+
+No verbatim upstream passage is included. This note is a release-only transformation of the original local excerpt archive.

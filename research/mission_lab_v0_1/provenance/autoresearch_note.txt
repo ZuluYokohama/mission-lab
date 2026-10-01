@@ -1,0 +1,6 @@
+karpathy/autoresearch README
+Source: https://github.com/karpathy/autoresearch/blob/228791fb499afffb54b46200aca536f79142f117/README.md
+
+Design interpretation: constrain an experiment, retain its decision and observations, and revise with explicit lineage. This controller contains no autonomous code editing or training loop.
+
+No verbatim upstream passage is included. This note is a release-only transformation of the original local excerpt archive.

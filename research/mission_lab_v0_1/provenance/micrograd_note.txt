@@ -1,0 +1,6 @@
+karpathy/micrograd README
+Source: https://github.com/karpathy/micrograd/blob/7bc720e951fe422b8f8814aa5aa1b64121d26b4c/README.md
+
+Design interpretation: make operator relationships and intermediate state explicit so a reader can inspect how outputs depend on inputs. This controller does not implement automatic differentiation.
+
+No verbatim upstream passage is included. This note is a release-only transformation of the original local excerpt archive.

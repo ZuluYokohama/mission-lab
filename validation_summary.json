@@ -1,0 +1,108 @@
+{
+  "artifact_kind": "generated public projection of local release validation",
+  "budget_change_origin": "injected_demo",
+  "changed_pattern_binding": true,
+  "demonstration_accepted": true,
+  "estimate_origin": "injected_fixture",
+  "human_review": false,
+  "independent_reproduction": false,
+  "independent_vv_campaign_complete": false,
+  "observations_are_controller_reported": true,
+  "raw_evidence_distributed": false,
+  "runs": {
+    "baseline": {
+      "artifacts": [
+        {
+          "input_id": "abc",
+          "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+          "size_bytes": 3
+        },
+        {
+          "input_id": "empty",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 0
+        },
+        {
+          "input_id": "pattern",
+          "sha256": "909d26d209cbd700c2e7266ec398959cd4fff4aab86f531e4912f58ca1a02c2a",
+          "size_bytes": 131073
+        }
+      ],
+      "controller_observed_reservations": {
+        "enforced_timeout_seconds": 60.0,
+        "peak_reserved_buffer_bytes": 139265,
+        "peak_workers_observed": 2,
+        "physical_cpu_cores_used": null,
+        "total_process_memory_bytes": null
+      },
+      "counts": {
+        "blocked": 0,
+        "failed": 0,
+        "succeeded": 10,
+        "timed_out": 0
+      },
+      "integrity_manifest_sha256": "a06c8fd7e2a22e8580e34077cbe553bd09f5fba1612ab2fc3f1cc943938ea2f3",
+      "pattern_candidate": "whole_v1",
+      "plan_id": "b978eb6412579c3c964121cae56b8acd6fe54c33bf103b27f9461db094cb37ef",
+      "repeated_replay_equal": true,
+      "resource_limits": {
+        "read_buffer_bytes": 4194304,
+        "timeout_seconds": 60,
+        "workers": 2
+      },
+      "semantic_sha256": "a25f72c8ce237b6c5f5a260ef929fe511f980c72e5612fb504cb26165ae727e5"
+    },
+    "revised": {
+      "artifacts": [
+        {
+          "input_id": "abc",
+          "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+          "size_bytes": 3
+        },
+        {
+          "input_id": "empty",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 0
+        },
+        {
+          "input_id": "pattern",
+          "sha256": "909d26d209cbd700c2e7266ec398959cd4fff4aab86f531e4912f58ca1a02c2a",
+          "size_bytes": 131073
+        }
+      ],
+      "controller_observed_reservations": {
+        "enforced_timeout_seconds": 60.0,
+        "peak_reserved_buffer_bytes": 40960,
+        "peak_workers_observed": 2,
+        "physical_cpu_cores_used": null,
+        "total_process_memory_bytes": null
+      },
+      "counts": {
+        "blocked": 0,
+        "failed": 0,
+        "succeeded": 10,
+        "timed_out": 0
+      },
+      "integrity_manifest_sha256": "6e76f5a4a3726dcead8a8da20e924f410b768f1fb82cc9f6e7a34a11a383b598",
+      "pattern_candidate": "stream_v1",
+      "plan_id": "881cdc920a880c57ac53a8c1682b02ee03790c4d916a5283e45faf56a83658f2",
+      "repeated_replay_equal": true,
+      "resource_limits": {
+        "read_buffer_bytes": 65536,
+        "timeout_seconds": 60,
+        "workers": 2
+      },
+      "semantic_sha256": "db338fc3a1b83fc73980da8f27ac3b23ea4b870291f7c1e3723ec9861868f93e"
+    }
+  },
+  "same_required_results": true,
+  "schema_version": 1,
+  "source_identity": "706806ec40d37608dd146e1a5f3f115f69dab7f185dfef39cbb7a3f18489d979",
+  "test_results": {
+    "passed": 143,
+    "skip_reason": "Windows symbolic-link privilege unavailable for two cases; separate reparse tests passed",
+    "skipped": 2,
+    "subtests_passed": 13
+  },
+  "tested_python": "3.12.14"
+}

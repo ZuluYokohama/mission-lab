@@ -1,0 +1,76 @@
+{
+  "added_package_files": [
+    "LICENSE.md",
+    "NOTICE.md",
+    "provenance/autoresearch_note.txt",
+    "provenance/jpl_state_analysis_note.txt",
+    "provenance/llmc_note.txt",
+    "provenance/micrograd_note.txt"
+  ],
+  "human_review": false,
+  "independent_vv_campaign_complete": false,
+  "original_evidence_distributed": false,
+  "original_package_source_identity": "454dd566fa5ebc24e0d6f275c671982f60a6ad5e416c11e2b44907ed5b87a670",
+  "release": "0.1.0-preview",
+  "release_package_source_identity": "706806ec40d37608dd146e1a5f3f115f69dab7f185dfef39cbb7a3f18489d979",
+  "release_transformations": {
+    "ARCHITECTURE.mmd": {
+      "change": "release adaptation",
+      "original_sha256": "38b0a9d07a7763842cc3d757dceec5a595e24908789e3621dfce4d884c1ed53b",
+      "release_sha256": "9f8f7cbc8ee83e44c531e9c7b311ae23b5c70f8f3dac9dbca762663bba83c4b7"
+    },
+    "CONTRACT.md": {
+      "change": "release adaptation",
+      "original_sha256": "46e1ae56489c73f326fa5f72fb053a87f5f6a007f123948a114186ade3953605",
+      "release_sha256": "13e0e7a17d21fcb184d03e48299b71abba96501847b177a5ed65d8adeba6a256"
+    },
+    "LLM_SYSTEMS_MAP.md": {
+      "change": "release adaptation",
+      "original_sha256": "7e17a13207029bded12107c8b934073592297df298e93821b5a67c8133d9256c",
+      "release_sha256": "cac630ee8876a6e523ed5b77acb0a0ded577503765ff8448286c9b3d008db626"
+    },
+    "PROTOCOL.md": {
+      "change": "release adaptation",
+      "original_sha256": "f2004be622a570902feddb33338979b9301c2a3b34b633ceb63ac307a69a151c",
+      "release_sha256": "94df7234e304d950f4a49712340b9da316e4240b093fcc082617978dfa16b57c"
+    },
+    "README.md": {
+      "change": "release adaptation",
+      "original_sha256": "3e9f6e161ac1760359558bd5dcaf3d414e44387614c2408f699139b121287302",
+      "release_sha256": "484e50f14b0d966cdc473e7252774d7e25316b98638aa730db37afc9937a6e0f"
+    },
+    "SOURCES.json": {
+      "change": "release adaptation",
+      "original_sha256": "2b0a708d380805401cbddda6f990bb398f5592f291d7abb94047108aa88567ca",
+      "release_sha256": "87e7e43cad71c323c45bae7510b08859e0d1e41f3e58dbab1a42111a267f369a"
+    },
+    "core.py": {
+      "change": "release adaptation",
+      "original_sha256": "2f6f1fb4ccc863d9ee9545de51c646d3b3c4c20687661a5fa8cd3d7d6f7eccef",
+      "release_sha256": "46d0a248736065596dbab9cadf40d6f72e699d136550df970f2006e11a777187"
+    },
+    "inventory.py": {
+      "change": "release adaptation",
+      "original_sha256": "8e0f8f0f441ace6f8342bf51842601f19967b717cd75648de01ed4b67f776021",
+      "release_sha256": "f4c516d9a37ca54b777fa8e1a818b9409e21cf8b0cbe7a1ecdacaa271b2ba11e"
+    },
+    "provenance/autoresearch_excerpt.txt": {
+      "change": "omitted/replaced",
+      "original_sha256": "605c4d850b10b0e3fc5d2a97ad5072f1b12ebaa05cda06c6d47b54607745ca44"
+    },
+    "provenance/jpl_state_analysis_excerpt.txt": {
+      "change": "omitted/replaced",
+      "original_sha256": "555a2f09dec6bfb5bcf4b194e8c88ecf61617ae64c514d976dc5e9e3f88c7d89"
+    },
+    "provenance/llmc_excerpt.txt": {
+      "change": "omitted/replaced",
+      "original_sha256": "62d99c2943217da32ac6d81a9655d727d28f4f3f8a071233c9c6b4a654b30252"
+    },
+    "provenance/micrograd_excerpt.txt": {
+      "change": "omitted/replaced",
+      "original_sha256": "9f326c9ac21e7e81b56ca9362a3b1e4b9856001120803609c87fc47eef25cc76"
+    }
+  },
+  "schema_version": 1,
+  "scope": "Mission Lab controller only"
+}
