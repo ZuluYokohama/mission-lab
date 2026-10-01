@@ -1,6 +1,19 @@
 # GitHub and CodeRabbit setup
 
-This file is the intended repository setup, not evidence that remote settings are active. The intended public repository is `ZuluYokohama/mission-lab`. No paid feature, integration access or completed check is inferred from subscription status.
+This file describes the repository policy and a dated observation of its setup. The public repository is [ZuluYokohama/mission-lab](https://github.com/ZuluYokohama/mission-lab). No paid feature, integration access or completed check is inferred from subscription status.
+
+## Verified setup on October 1, 2026
+
+The GitHub settings UI showed the following after configuration:
+
+- `main` is the default branch. Squash merging is the only enabled merge method; automatic merging is off. Merged topic branches are deleted automatically and can be restored.
+- The active [main-quality-gate ruleset](https://github.com/ZuluYokohama/mission-lab/settings/rules/24327753) targets the default branch, currently `main`, with no bypass actors. It requires a pull request, resolved conversations, linear history, and the three checks listed below from GitHub Actions, with the branch up to date. Force pushes and branch deletion are blocked.
+- Required approving reviews are zero for the initial solo-maintainer workflow. This does not constitute human acceptance or independent review.
+- Private vulnerability reporting, the dependency graph and Dependabot alerts are enabled. Secret Protection and push protection were already enabled and remain enabled.
+
+[CI run 36911908122](https://github.com/ZuluYokohama/mission-lab/actions/runs/36911908122) completed successfully for the initial organization commit `2cc0ff3840fce455a8df3d7dcdb5208d0a71ab27`, including the baseline/revision demonstration and replay on both operating systems. Later commits require their own checks.
+
+CodeRabbit's [first review](https://github.com/ZuluYokohama/mission-lab/pull/1#pullrequestreview-5384274268) reported the repository configuration, assertive profile and Essentials plan. Its `CodeRabbit` status was successful while two actionable findings remained, so it is advisory and is not a required passing check. Review completion does not mean findings are resolved. These observations are a dated setup record, not continuous monitoring of account or repository settings.
 
 ## Main branch and pull requests
 
@@ -12,7 +25,7 @@ After these checks have actually completed on GitHub, require their exact names 
 - `Tests (ubuntu-latest)`
 - `Tests (windows-latest)`
 
-The recommended ruleset applies to `refs/heads/main`. Required checks should be up to date with the base branch. Protect administrator changes too, with any emergency bypass recorded in the PR. Avoid adding a nonexistent check or mandatory reviewer that would prevent all merges.
+The ruleset follows the default branch, currently `refs/heads/main`. Required checks should be up to date with the base branch. Protect administrator changes too, with any emergency bypass recorded in the PR. Avoid adding a nonexistent check or mandatory reviewer that would prevent all merges.
 
 ## CodeRabbit
 

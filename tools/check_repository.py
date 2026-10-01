@@ -24,11 +24,11 @@ REQUIRED = {'README.md', 'CONTRIBUTING.md', 'SECURITY.md', 'LICENSE.md', 'NOTICE
             'validation_summary.json', '.gitattributes', '.coderabbit.yaml',
             '.github/workflows/ci.yml', '.github/CODEOWNERS', 'requirements-dev.txt',
             PACKAGE + '/SOURCES.json', PACKAGE + '/LICENSE.md', PACKAGE + '/NOTICE.md'}
-LINK = re.compile(r'\[[^\]\n]*\]\(([^)\n]+)\)')
 PRIVATE_KEY = re.compile(r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----')
 
 
 def path_error(name: str) -> str | None:
+    """Reject paths and artifact types excluded from the public release."""
     path = PurePosixPath(name)
     if path.is_absolute() or '..' in path.parts or '\\' in name:
         return 'unsafe tracked path'
@@ -46,6 +46,7 @@ def path_error(name: str) -> str | None:
 
 
 def tracked(root: Path) -> dict[str, str]:
+    """Read tracked paths and modes from the index, rejecting merge conflicts."""
     raw = subprocess.check_output(['git', 'ls-files', '--stage', '-z'], cwd=root)
     result = {}
     for entry in raw.decode('utf-8').split('\0'):
@@ -60,6 +61,7 @@ def tracked(root: Path) -> dict[str, str]:
 
 
 def note_errors(root: Path, manifest: dict) -> list[str]:
+    """Verify confined provenance notes against their recorded content hashes."""
     errors = []
     for source in manifest['sources']:
         relative = source['archived_path']
@@ -77,10 +79,105 @@ def note_errors(root: Path, manifest: dict) -> list[str]:
     return errors
 
 
+def _link_destination(text: str, index: int) -> tuple[str | None, int]:
+    """Consume one inline destination and optional title without rewinding."""
+    size = len(text)
+    while index < size and text[index] in ' \t':
+        index += 1
+    angle = index < size and text[index] == '<'
+    if angle:
+        index += 1
+    value = []
+    depth = 0
+    closed_angle = False
+    while index < size:
+        char = text[index]
+        if char in '\r\n':
+            return None, index + 1
+        if char == '\\' and index + 1 < size and text[index + 1] in r'\()<>':
+            value.append(text[index + 1])
+            index += 2
+            continue
+        if angle:
+            if char == '>':
+                closed_angle = True
+                index += 1
+                break
+        elif char in ' \t':
+            break
+        elif char == '(':
+            depth += 1
+        elif char == ')':
+            if depth == 0:
+                return ''.join(value), index + 1
+            depth -= 1
+        value.append(char)
+        index += 1
+    if angle and not closed_angle or depth:
+        return None, index
+    separated = index < size and text[index] in ' \t'
+    while index < size and text[index] in ' \t':
+        index += 1
+    if index < size and text[index] == ')':
+        return ''.join(value), index + 1
+    if not separated or index >= size or text[index] not in '\"\'(':
+        return None, index
+    delimiter = text[index]
+    end = ')' if delimiter == '(' else delimiter
+    index += 1
+    while index < size:
+        char = text[index]
+        if char in '\r\n':
+            return None, index + 1
+        if char == '\\' and index + 1 < size and text[index + 1] in ('\\', end):
+            index += 2
+            continue
+        index += 1
+        if char == end:
+            while index < size and text[index] in ' \t':
+                index += 1
+            if index < size and text[index] == ')':
+                return ''.join(value), index + 1
+            return None, index
+    return None, index
+
+
+def inline_destinations(text: str):
+    """Scan single-line inline links/images in linear time and bounded space.
+
+    Supports bare destinations with balanced parentheses, angle destinations,
+    and optional double-quoted, single-quoted or parenthesized titles. Escaped
+    label brackets and destination delimiters are recognized. Reference links,
+    multiline links, HTML and Markdown code-block context are not parsed.
+    Malformed candidates are ignored. Every cursor moves forward, including
+    when a candidate is malformed; unmatched brackets never restart a search.
+    """
+    index = 0
+    depth = 0
+    size = len(text)
+    while index < size:
+        char = text[index]
+        if char == '\\' and index + 1 < size and text[index + 1] in r'\[]':
+            index += 2
+            continue
+        if char in '\r\n':
+            depth = 0
+        elif char == '[':
+            depth += 1
+        elif char == ']' and depth:
+            depth -= 1
+            if index + 1 < size and text[index + 1] == '(':
+                value, index = _link_destination(text, index + 2)
+                if value is not None:
+                    yield value
+                continue
+        index += 1
+
+
 def link_errors(root: Path, name: str, text: str, names: set[str]) -> list[str]:
+    """Check discovered local destinations against the tracked checkout."""
     errors = []
-    for raw in LINK.findall(text):
-        value = raw.strip().split(' "', 1)[0].strip('<>')
+    for value in inline_destinations(text):
         target = urlsplit(value)
         if target.scheme or target.netloc or not target.path:
             continue
@@ -96,6 +193,7 @@ def link_errors(root: Path, name: str, text: str, names: set[str]) -> list[str]:
 
 
 def check(root: Path) -> dict:
+    """Return scoped repository diagnostics without modifying tracked files."""
     entries = tracked(root)
     names = set(entries)
     errors = ['Missing required file: ' + name for name in sorted(REQUIRED - names)]

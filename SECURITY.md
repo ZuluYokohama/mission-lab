@@ -4,7 +4,7 @@ Mission Lab v0.1 is an experimental local research controller. It is not a secur
 
 ## Reporting a vulnerability
 
-If GitHub private vulnerability reporting is enabled for the published repository, use **Security → Report a vulnerability**. Availability of that feature has not been verified for this local release preparation.
+Use **Security → Report a vulnerability** on the [repository's security page](https://github.com/ZuluYokohama/mission-lab/security). Private vulnerability reporting was enabled and verified on October 1, 2026.
 
 If there is no private reporting option, open an issue requesting a private contact route without including exploit details, credentials, personal information or sensitive files. Wait for the maintainer to establish that route before sending sensitive details. No private email address or response-time commitment is currently published.
 
