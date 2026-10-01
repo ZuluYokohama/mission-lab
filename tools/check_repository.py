@@ -9,6 +9,7 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import re
+from string import punctuation
 import subprocess
 import sys
 from urllib.parse import unquote, urlsplit
@@ -94,7 +95,7 @@ def _link_destination(text: str, index: int) -> tuple[str | None, int]:
         char = text[index]
         if char in '\r\n':
             return None, index + 1
-        if char == '\\' and index + 1 < size and text[index + 1] in r'\()<>':
+        if char == '\\' and index + 1 < size and text[index + 1] in punctuation:
             value.append(text[index + 1])
             index += 2
             continue
@@ -113,7 +114,7 @@ def _link_destination(text: str, index: int) -> tuple[str | None, int]:
             depth -= 1
         value.append(char)
         index += 1
-    if angle and not closed_angle or depth:
+    if (angle and not closed_angle) or depth:
         return None, index
     separated = index < size and text[index] in ' \t'
     while index < size and text[index] in ' \t':
@@ -147,7 +148,7 @@ def inline_destinations(text: str):
 
     Supports bare destinations with balanced parentheses, angle destinations,
     and optional double-quoted, single-quoted or parenthesized titles. Escaped
-    label brackets and destination delimiters are recognized. Reference links,
+    label brackets and ASCII punctuation in destinations are recognized. Reference links,
     multiline links, HTML and Markdown code-block context are not parsed.
     Malformed candidates are ignored. Every cursor moves forward, including
     when a candidate is malformed; unmatched brackets never restart a search.

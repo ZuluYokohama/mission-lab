@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 from pathlib import Path
 import subprocess
+from string import punctuation
 import sys
 import tempfile
 import unittest
@@ -74,6 +75,27 @@ class PublicBoundaryTests(unittest.TestCase):
                 self.assertEqual(list(guard.inline_destinations(text)), [])
         self.assertEqual(list(guard.inline_destinations('[bad](missing.md "broken\n[good](README.md)')),
                          ['README.md'])
+
+    def test_destination_punctuation_escapes_and_literal_backslashes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'KNOWN_ISSUES.md').write_text('known', encoding='utf-8')
+            for wrap in ('{}', '<{}>'):
+                with self.subTest(wrap=wrap):
+                    existing = wrap.format(r'KNOWN\_ISSUES.md')
+                    missing = wrap.format(r'MISSING\_ISSUES.md')
+                    self.assertEqual(guard.link_errors(root, 'index.md',
+                        f'[known]({existing})', {'KNOWN_ISSUES.md', 'index.md'}), [])
+                    self.assertEqual(guard.link_errors(root, 'index.md',
+                        f'[missing]({missing})', {'KNOWN_ISSUES.md', 'index.md'}),
+                        ['index.md: broken local link: MISSING_ISSUES.md'])
+                    for char in punctuation:
+                        destination = wrap.format('part\\' + char + '.md')
+                        self.assertEqual(list(guard.inline_destinations(f'[x]({destination})')),
+                                         ['part' + char + '.md'])
+                    literal = wrap.format(r'part\z.md')
+                    self.assertEqual(list(guard.inline_destinations(f'[x]({literal})')),
+                                     [r'part\z.md'])
 
     def test_path_checks_still_reject_titled_untracked_and_escaping_links(self):
         with tempfile.TemporaryDirectory() as folder:
