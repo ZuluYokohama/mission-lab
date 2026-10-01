@@ -1,0 +1,29 @@
+name: Bug report
+description: Reproduce an implementation or evidence-integrity failure.
+title: "Bug: "
+body:
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and observed behavior
+      description: Identify the contract or requirement that differs from the result.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Use disposable fixtures. Remove personal paths, credentials and private evidence.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit, OS and Python version
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and uncertainty
+      description: State which observations are measured, inferred, simulated or missing.

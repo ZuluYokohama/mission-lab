@@ -1,0 +1,32 @@
+name: V&V proposal
+description: Propose a bounded, falsifiable verification or validation step.
+title: "V&V: "
+body:
+  - type: textarea
+    id: claim
+    attributes:
+      label: Claim, intended use and scope
+      description: Reference an existing known issue or requirement where possible.
+    validations:
+      required: true
+  - type: textarea
+    id: oracle
+    attributes:
+      label: Independent evidence or oracle
+      description: Explain shared assumptions and what would falsify the claim.
+    validations:
+      required: true
+  - type: textarea
+    id: criteria
+    attributes:
+      label: Acceptance, rejection and inconclusive criteria
+      description: Define these before collecting final results.
+    validations:
+      required: true
+  - type: textarea
+    id: bounds
+    attributes:
+      label: Resource bounds and retained artifacts
+      description: Include time, worker/buffer limits, private-data treatment and review needs.
+    validations:
+      required: true

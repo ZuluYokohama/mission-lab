@@ -1,0 +1,68 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+early_access: false
+tone_instructions: >-
+  Be concise and evidence-driven. Prioritize correctness, reproducibility,
+  resource boundaries, and concrete failure cases over style preferences.
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  review_details: true
+  review_progress: true
+  fail_commit_status: true
+  poem: false
+  in_progress_fortune: false
+  auto_apply_labels: false
+  auto_assign_reviewers: false
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+  path_filters:
+    - '!research/mission_lab_v0_1/evidence/**'
+    - '!**/__pycache__/**'
+    - '!**/.pytest_cache/**'
+    - '!**/*.bin'
+  path_instructions:
+    - path: 'research/mission_lab_v0_1/**/*.py'
+      instructions: >-
+        Review software correctness separately from scientific assurance.
+        Check strict record types, identities, dependencies, ownership, resource
+        reservations, worker cleanup, timeouts, failure evidence, confinement
+        and revision lineage. Identify concrete counterexamples. A consistent
+        record or passing test does not establish independent verification.
+        Preserve the standard-library-only runtime contract.
+    - path: '**/tests/**/*.py'
+      instructions: >-
+        Look for shared implementation assumptions, missing negative cases,
+        false passes after evidence mutation and assertions that repeat the
+        implementation. Distinguish simulation, replay and actual execution.
+        Keep test workloads bounded.
+    - path: '**/*.md'
+      instructions: >-
+        Check claims against scoped evidence. Distinguish estimates from
+        measurements, replay from independent execution and declared buffers
+        from total memory or energy. AI review is not human acceptance.
+        Preserve limitations unless traceable evidence supports changing them.
+    - path: '.github/**'
+      instructions: >-
+        Check minimal permissions, untrusted PR handling, immutable action
+        pinning, deterministic commands and stable check names. AI review
+        completion does not establish human review or independent V&V.
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+    simplify:
+      enabled: false
+    autofix:
+      enabled: false
+    fix_ci:
+      enabled: false
+    resolve_merge_conflict:
+      enabled: false
+chat:
+  auto_reply: false

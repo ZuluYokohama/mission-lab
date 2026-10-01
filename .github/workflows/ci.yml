@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository:
+    name: Repository checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Check public files, licenses, provenance and documentation links
+        run: python -B tools/check_repository.py
+      - name: Check guard failure cases
+        run: python -B -m unittest discover -s tools/tests -v
+
+  test:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install pinned test dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+      - name: Run package tests sequentially
+        run: python -B -m pytest research/mission_lab_v0_1/tests -q -p no:cacheprovider
+      - name: Validate the fixture specification
+        run: python -B -m research.mission_lab_v0_1 validate --mission research/mission_lab_v0_1/fixtures/mission.json
+      - name: Execute baseline and tighter-budget revision
+        run: python -B -m research.mission_lab_v0_1 demo --out evidence/ci_demo
+      - name: Replay baseline evidence
+        run: python -B -m research.mission_lab_v0_1 replay --run research/mission_lab_v0_1/evidence/ci_demo/baseline_run
+      - name: Replay revised evidence
+        run: python -B -m research.mission_lab_v0_1 replay --run research/mission_lab_v0_1/evidence/ci_demo/revised_run
+      - name: Ensure execution preserved tracked files
+        run: git diff --exit-code
