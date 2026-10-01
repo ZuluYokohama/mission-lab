@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.bin -text
+# Preserve the namespace initializer bytes recorded in v0.1 evidence.
+research/__init__.py -text

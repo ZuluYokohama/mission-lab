@@ -4,6 +4,8 @@ Mission Lab connects a structured file-audit specification to an operator DAG, a
 
 This preview has package tests and a reproducible fixture demonstration. Independent V&V and human intended-use validation are pending. Read [KNOWN_ISSUES.md](KNOWN_ISSUES.md) before relying on its validators. It is not a security sandbox or a safety-critical controller.
 
+Start with the [documentation map](docs/README.md), [contribution guide](CONTRIBUTING.md), or [roadmap](docs/ROADMAP.md). [Review and release](docs/REVIEW_AND_RELEASE.md) explains how CI, CodeRabbit findings and maintainer acceptance fit together.
+
 ## License
 
 Original project code, fixtures and project-authored documentation are available under [PolyForm Noncommercial 1.0.0](LICENSE.md). The full license defines permitted purposes and redistribution obligations, including permissions for listed educational, public research, charitable and government organizations regardless of funding. Uses outside that grant require separate permission from relevant rights holders. This is public source-available software, not OSI open source. See [NOTICE.md](NOTICE.md) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
@@ -37,6 +39,8 @@ Tests require pytest, which is separate from the dependency-free runtime:
 ```powershell
 python -B -m pytest research/mission_lab_v0_1/tests -q
 ```
+
+Development dependency versions are pinned in [requirements-dev.txt](requirements-dev.txt). The [CI workflow](.github/workflows/ci.yml) defines repository checks and Python 3.12 tests on Windows and Ubuntu. [CodeRabbit](.coderabbit.yaml) has project-specific review instructions; its repository installation and hosted results must be verified separately. Neither service completes the independent V&V campaign.
 
 See [VALIDATION.md](VALIDATION.md) for this release's actual results and [VV_PLAN.md](VV_PLAN.md) for the unimplemented independent validation campaign. See the package [contract](research/mission_lab_v0_1/CONTRACT.md), [protocol](research/mission_lab_v0_1/PROTOCOL.md), [architecture](research/mission_lab_v0_1/ARCHITECTURE.mmd), [LLM systems map](research/mission_lab_v0_1/LLM_SYSTEMS_MAP.md) and [source registry](research/mission_lab_v0_1/SOURCES.json).
 

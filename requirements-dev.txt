@@ -1,0 +1,8 @@
+# Development/CI only, matching the tested Python 3.12 environment.
+# Runtime has no third-party dependencies. Update pins through reviewed PRs.
+pytest==9.0.2
+iniconfig==2.3.0
+packaging==26.3
+pluggy==1.6.0
+Pygments==2.21.0
+colorama==0.4.6; sys_platform == "win32"
