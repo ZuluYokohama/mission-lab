@@ -1,6 +1,6 @@
 # Development/CI only, matching the tested Python 3.12 environment.
 # Runtime has no third-party dependencies. Update pins through reviewed PRs.
-pytest==9.0.2
+pytest==9.1.1
 iniconfig==2.3.0
 packaging==26.3
 pluggy==1.6.0
