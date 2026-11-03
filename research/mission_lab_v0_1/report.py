@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 
-from . import core, grok
+from . import core, grok, seal
 from .budget import verify_ledger, verify_telemetry
 
 
@@ -18,6 +18,10 @@ def render_report(semantic, observations):
     counts = counts_for(semantic)
     profile = semantic.get("profile", {})
     resources = profile.get("resources", {})
+    # A pre-change run has no seal claim. Its report bytes omit the controller-key
+    # sentence and keep the earlier gate and resume wording. New runs always store a claim.
+    seal_claim = semantic.get("seal") if isinstance(semantic, dict) else None
+    sealed = isinstance(seal_claim, dict)
     lines = ["# Mission execution evidence", "", f"Mission: `{semantic.get('mission_id')}`",
              f"Plan: `{semantic.get('plan_id')}`", "",
              "Result: " + ("accepted within the registered operator contract" if semantic.get("accepted") else "not accepted; retained failures require review"),
@@ -28,8 +32,15 @@ def render_report(semantic, observations):
              f"Cost-estimate origin: `{resources.get('estimate_origin')}`.",
              "Reservations constrain registered worker count and explicit input buffers. Total process memory, physical core use, and energy are unknown.",
              "Worker processes receive a deny-by-default environment: platform start names when set, two controller-forced interpreter flags, and per-task resource grants. Observations list those names and do not retain values.",
-             "Predicted schedules use a bounded heuristic. Observed durations include worker startup after launch; costs may differ from predictions.", "",
-             "## Outcomes", "", "| Status | Count |", "|---|---:|"]
+             "Predicted schedules use a bounded heuristic. Observed durations include worker startup after launch; costs may differ from predictions.", ""]
+    if sealed:
+        lines += ["", "## Seal", "",
+                  "Controller key variables cannot be granted and are not copied: " + ", ".join(f"`{name}`" for name in sorted(core.CONTROLLER_KEY_ENV)) + ".",
+                  f"Signature status: `signed`. Algorithm: `{seal_claim.get('algorithm')}`. Key id: `{seal_claim.get('key_id')}`.",
+                  "The signature is HMAC-SHA256 over the canonical integrity manifest. That manifest hashes the plan, events, receipts, gate outcomes, budget ledger, and the other files in the run. A verifier needs the same key. A match shows those bytes are unchanged to holders of the key. It is not a public signature, and it does not by itself prove who produced the run to someone who lacks the key.",
+                  "Replay reports `verified` only after that HMAC matches. This line says `signed` because it was written when the seal was produced.",
+                  ""]
+    lines += ["## Outcomes", "", "| Status | Count |", "|---|---:|"]
     for status, count in counts.items():
         lines.append(f"| {status} | {count} |")
     lines += ["", "| Task | Status | SHA-256 / verification | Bytes |", "|---|---|---|---:|"]
@@ -62,9 +73,13 @@ def render_report(semantic, observations):
     gate_rows = [task for task in semantic.get("tasks", [])
                  if isinstance(task.get("output"), dict) and task["output"].get("outcome") in ("pass", "fail", "indeterminate", "pending")]
     if gate_rows:
+        if sealed:
+            pending_text = "Pending means the predicate is not yet a pass. An approval record names an approver id and a UTC timestamp. Without declared approver key ids, that record is not signed and not authenticated. When the predicate lists approver key ids, a missing or invalid HMAC stays pending and does not pass."
+        else:
+            pending_text = "Pending means `approvals.json` has no matching record. That file records an approver id and a timestamp. It is not signed and not authenticated."
         lines += ["", "## Merit gates", "",
                   "A gate receipt is pass, fail, indeterminate, or pending. The task status stays succeeded when the controller finishes the evaluation. Fail, indeterminate, and pending do not launch downstream tasks and do not charge their model reservations.",
-                  "Pending means `approvals.json` has no matching record. That file records an approver id and a timestamp. It is not signed and not authenticated.",
+                  pending_text,
                   "", "| Gate | Outcome | Reason |", "|---|---|---|"]
         for task in sorted(gate_rows, key=lambda item: item["task_id"]):
             reason = str(task["output"].get("reason", "")).replace("|", "/").replace("`", "")
@@ -81,14 +96,26 @@ def render_report(semantic, observations):
                   text.replace("`", ""),
                   "Evidence refs: " + (", ".join(str(item) for item in refs) if refs else "none") + ".",
                   "Changed tasks: " + (", ".join(str(item) for item in changed) if changed else "none") + ".",
-                  "Affected tasks: " + (", ".join(str(item) for item in affected) if affected else "none") + ".",
-                  ""]
+                  "Affected tasks: " + (", ".join(str(item) for item in affected) if affected else "none") + "."]
+        prior_seal = revision.get("prior_seal") if isinstance(revision.get("prior_seal"), dict) else None
+        if prior_seal:
+            lines.append(
+                f"Prior seal sha256: `{prior_seal.get('seal_sha256')}`. Algorithm: `{prior_seal.get('algorithm')}`. Key id: `{prior_seal.get('key_id', 'none')}`.")
+        lines.append("")
     resume = semantic.get("resume_of") if isinstance(semantic, dict) else None
     if isinstance(resume, dict):
-        lines += ["", "## Resume", "",
-                  f"This run started again from plan `{resume.get('plan_id')}` after an approval record was copied into the run directory.",
-                  f"Prior semantic sha256: `{resume.get('prior_semantic_sha256')}`. The approval record is not authenticated, and this line does not reopen the prior run.",
-                  ""]
+        if sealed:
+            lines += ["", "## Resume", "",
+                      f"This run started again from plan `{resume.get('plan_id')}` after an approval record was copied into the run directory.",
+                      f"Prior semantic sha256: `{resume.get('prior_semantic_sha256')}`.",
+                      f"Prior seal sha256: `{resume.get('prior_seal_sha256', 'none')}`. Prior seal key id: `{resume.get('prior_seal_key_id', 'none')}`.",
+                      "This line does not reopen the prior run.",
+                      ""]
+        else:
+            lines += ["", "## Resume", "",
+                      f"This run started again from plan `{resume.get('plan_id')}` after an approval record was copied into the run directory.",
+                      f"Prior semantic sha256: `{resume.get('prior_semantic_sha256')}`. The approval record is not authenticated, and this line does not reopen the prior run.",
+                      ""]
     lines += ["", "## Observations", "",
               "| Task | Estimated duration (ns) | Observed duration (ns) | Reserved buffer bytes | Environment names |",
               "|---|---:|---:|---:|---|"]
@@ -135,48 +162,28 @@ def render_report(semantic, observations):
               "Different cache state, process startup, storage contention, and estimate error can explain timing differences.",
               "Matching digests supports the file-audit contract. It establishes no numerical-model, energy-saving, or general software-generation claim.",
               "An llm:grok receipt records the request, response hashes, provider-reported token counts, latency, and HTTP status. It does not score model quality or establish that the response is true.",
-              "A gate predicate compares declared receipt fields. Passing a gate is not a quality score, a signature, or a human review of the mission.",
+              ("A gate predicate compares declared receipt fields. Passing a gate is not a quality score or a human review of the mission. An approval HMAC, when required, is not that review."
+               if sealed else
+               "A gate predicate compares declared receipt fields. Passing a gate is not a quality score, a signature, or a human review of the mission."),
               "Offline replay regenerates recorded outcomes and re-evaluates gate predicates from archived receipts. It performs no new independent execution and does not call a model.", ""]
     return "\n".join(lines)
 
 
 def seal_integrity(output):
-    output = Path(output)
-    files = {path.relative_to(output).as_posix(): core.file_hash(path)
-             for path in sorted(output.rglob("*")) if path.is_file() and path != output / "integrity.json"}
-    core.write_json(output / "integrity.json", {"schema_version": 1, "files": files})
+    seal.write_integrity(Path(output), seal.require_seal_key())
 
 
-def verify_integrity(output):
-    output = core.confined_path(output, [core.ROOT / "evidence"])
-    manifest = core.read_json(output / "integrity.json")
-    core.fields(manifest, ("schema_version", "files"), ("semantic_sha256", "hash_note"), label="integrity")
-    if type(manifest["schema_version"]) is not int or manifest["schema_version"] != 1 or not isinstance(manifest["files"], dict):
-        raise core.LabError("Malformed evidence integrity manifest")
-    actual = set()
-    for path in output.rglob("*"):
-        if core.has_link(path):
-            raise core.LabError("Evidence contains a link")
-        if path.is_file() and path != output / "integrity.json":
-            actual.add(path.relative_to(output).as_posix())
-    if actual != set(manifest["files"]):
-        raise core.LabError("Evidence file inventory changed")
-    for relative, expected in manifest["files"].items():
-        path = core.confined_path(output / relative, [output])
-        if not isinstance(expected, str) or core.file_hash(path) != expected:
-            raise core.LabError("Archived evidence changed: " + relative)
-    if "semantic_sha256" in manifest and manifest["semantic_sha256"] != core.file_hash(output / "semantic.json"):
-        raise core.LabError("Semantic evidence hash mismatch")
-    return output
+def verify_integrity(output, *, allow_legacy_unsigned=False):
+    return seal.verify_directory(output, allow_legacy_unsigned=allow_legacy_unsigned)
 
 
-def replay_run(run):
-    output = verify_integrity(run)
+def replay_run(run, *, allow_legacy_unsigned=False):
+    output, seal_status = verify_integrity(run, allow_legacy_unsigned=allow_legacy_unsigned)
     plan = core.load_plan(output / "plan.json")
     semantic = core.read_json(output / "semantic.json")
     observations = core.read_json(output / "observations.json")
     core.fields(semantic, ("schema_version", "plan_id", "mission_id", "accepted", "profile", "tasks"),
-                ("model_budget", "revision", "resume_of"), label="semantic record")
+                ("model_budget", "revision", "resume_of", "seal"), label="semantic record")
     if type(semantic["schema_version"]) is not int or semantic["schema_version"] != 1:
         raise core.LabError("Unsupported semantic schema")
     if semantic["profile"] != {"estimate_origin": plan["resources"]["estimate_origin"], "resources": plan["resources"],
@@ -210,10 +217,16 @@ def replay_run(run):
     if ("revision" in semantic) != ("revision" in plan) or semantic.get("revision") != plan.get("revision"):
         raise core.LabError("Revision record contradicts the plan")
     if "resume_of" in semantic:
-        core.fields(semantic["resume_of"], ("plan_id", "prior_semantic_sha256"), label="resume record")
+        core.fields(semantic["resume_of"], ("plan_id", "prior_semantic_sha256"),
+                    ("prior_seal_sha256", "prior_seal_key_id"), label="resume record")
         prior_hash = semantic["resume_of"]["prior_semantic_sha256"]
         if semantic["resume_of"]["plan_id"] != plan["plan_id"] or not isinstance(prior_hash, str) or core.SHA256.fullmatch(prior_hash) is None:
             raise core.LabError("Resume record does not match the plan")
+        if "prior_seal_sha256" in semantic["resume_of"] and core.SHA256.fullmatch(semantic["resume_of"]["prior_seal_sha256"]) is None:
+            raise core.LabError("Resume record has a malformed prior seal hash")
+        if "prior_seal_key_id" in semantic["resume_of"] and (
+                "prior_seal_sha256" not in semantic["resume_of"] or core.SHA256.fullmatch(semantic["resume_of"]["prior_seal_key_id"]) is None):
+            raise core.LabError("Resume record has a malformed prior seal key id")
     inputs = {item["id"]: item for item in plan["mission"]["inputs"]}
     for relative, expected in plan["sources"].items():
         snapshot = core.confined_path(output / "source_snapshot" / relative, [output / "source_snapshot"])
@@ -272,7 +285,9 @@ def replay_run(run):
     regenerated = render_report(semantic, observations)
     if (output / "report.md").read_text(encoding="utf-8") != regenerated:
         raise core.LabError("Report does not match deterministic regeneration")
-    return {"schema_version": 1, "integrity_verified": True, "independent_execution": False,
+    verified = seal_status["status"] == "verified"
+    return {"schema_version": 1, "integrity_verified": verified, "signature_status": seal_status["status"],
+            "seal_key_id": seal_status.get("key_id"), "independent_execution": False,
             "semantic_sha256": core.digest_object(semantic), "counts": counts_for(semantic),
             "accepted": accepted, "report": regenerated}
 

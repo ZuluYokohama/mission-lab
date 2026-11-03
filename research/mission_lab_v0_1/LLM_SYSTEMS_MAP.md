@@ -8,6 +8,8 @@ This is a technical extension map. It is not an executable specification. The re
 
 A `gate` node can require one of those receipt fields, or a digest and byte count, before a later node is launched. The comparison is equality, a bounded whole-string pattern, or an integer bound. Passing it is not a quality score, a truth judgment, or a measurement of the variables in the tables below. A failed or indeterminate gate does not launch the downstream node and does not charge that node's model reservation. The predicate is not executable code.
 
+The run seal is HMAC-SHA256 over the canonical integrity manifest. The controller holds the key. The key id stored with the seal is a fingerprint. A match shows those archived bytes are unchanged to someone who has the key. It is not a public-key signature, and it does not by itself name an author to someone who lacks the key. An approval HMAC, when a gate lists approver key ids, is the same kind of check on that approval record. Neither HMAC is a model-quality score.
+
 ## Executable representation
 
 A complete system specification separates data snapshots and transforms, tokenizer/template, architecture graph, learned parameters, training state, request state, external information, runtime/backend, hardware environment and evaluation contract. These components form an artifact graph with explicit parent identities. A checkpoint alone does not preserve the whole system.

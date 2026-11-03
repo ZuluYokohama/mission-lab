@@ -3,13 +3,28 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
-from .core import read_json, write_json
+from .core import CONTROLLER_KEY_ENV, read_json, write_json
 from .operators import execute_operation
 
 
+def drop_controller_keys(env=None):
+    """Remove controller key names from a mapping. This does not erase the process image.
+
+    On Linux the initial environment block can still hold a value the parent passed.
+    The control that matters is that the controller does not pass these names.
+    """
+    target = os.environ if env is None else env
+    folded = {name.casefold() for name in CONTROLLER_KEY_ENV}
+    for name in [key for key in target if isinstance(key, str) and key.casefold() in folded]:
+        target.pop(name, None)
+    return target
+
+
 def main(argv=None):
+    drop_controller_keys()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--job", required=True)
     parser.add_argument("--result", required=True)

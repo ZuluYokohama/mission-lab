@@ -69,7 +69,15 @@ _WINDOWS_PLATFORM_ENV = frozenset({
     "PYTHONNOUSERSITE", "PYTHONPATH", "PYTHONSAFEPATH", "PYTHONUTF8",
 })
 FORCED_WORKER_ENV = {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1"}
-_RESERVED_ENV_NAMES = _POSIX_PLATFORM_ENV | _WINDOWS_PLATFORM_ENV | frozenset(FORCED_WORKER_ENV)
+# Controller secrets. Refusing these names is not a file-permission check.
+CONTROLLER_KEY_ENV = frozenset({
+    "MISSION_LAB_SEAL_KEY",
+    "MISSION_LAB_SEAL_KEY_FILE",
+    "MISSION_LAB_APPROVER_KEY",
+    "MISSION_LAB_APPROVER_KEY_FILE",
+    "MISSION_LAB_APPROVER_KEY_DIR",
+})
+_RESERVED_ENV_NAMES = _POSIX_PLATFORM_ENV | _WINDOWS_PLATFORM_ENV | frozenset(FORCED_WORKER_ENV) | CONTROLLER_KEY_ENV
 _MAX_DECLARED_ENV = 32
 _MAX_ENV_GRANTS = 64
 # Closed graphs for agent-sized task sets: the 25 hash/reference/verify/manifest
@@ -203,6 +211,12 @@ def _env_name(name):
     return name
 
 
+def _reject_controller_key(name):
+    """Case-folded. A Windows case variant is not a way to copy the seal key."""
+    if isinstance(name, str) and name.casefold() in {item.casefold() for item in CONTROLLER_KEY_ENV}:
+        raise LabError("Controller key variable cannot be granted: " + name)
+
+
 def validate_worker_env(value):
     """Accept declared names and per-task grants. Values are not a schema field."""
     fields(value, ("declared", "grants"), label="worker_env")
@@ -213,6 +227,7 @@ def validate_worker_env(value):
     names, seen = [], set()
     for name in declared:
         _env_name(name)
+        _reject_controller_key(name)
         folded = name.casefold()
         if folded in reserved:
             raise LabError("Worker environment variable is platform-controlled and cannot be granted: " + name)
@@ -314,6 +329,7 @@ def _worker_environment(resources, task_id, parent, windows):
         declared_folded = {item.casefold(): item for item in declared if isinstance(item, str)}
         reserved = {item.casefold() for item in _RESERVED_ENV_NAMES}
         for name in granted_names(resources, task_id):
+            _reject_controller_key(name)
             if not isinstance(name, str) or name.casefold() in reserved:
                 raise LabError("Worker environment variable is platform-controlled and cannot be granted: " + str(name))
             if name.casefold() not in declared_folded:
@@ -549,6 +565,9 @@ def source_manifest():
     for path in sorted(ROOT.rglob("*")):
         relative = path.relative_to(ROOT)
         if set(relative.parts) & {"evidence", "__pycache__", ".pytest_cache"}:
+            continue
+        # Retained pre-change run used to test legacy replay. It is not package source.
+        if "legacy_unsigned_270f1eb" in relative.parts:
             continue
         if path.is_file():
             if has_link(path):

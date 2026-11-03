@@ -1,5 +1,7 @@
 """Explicit revisions, scoped invalidation, and retained applicability."""
-from . import core
+from pathlib import Path
+
+from . import core, seal
 from .planner import build_plan, validate_plan_record, write_plan
 
 
@@ -20,7 +22,8 @@ def validate_trigger(trigger):
 
 def validate_revision(revision, graph):
     core.fields(revision, ("schema_version", "prior_plan_id", "trigger", "changed_tasks", "affected_tasks",
-                           "reusable_functional_results", "reuse_note", "invalidated_measurement_scope", "phase"), label="revision")
+                           "reusable_functional_results", "reuse_note", "invalidated_measurement_scope", "phase"),
+                ("prior_seal",), label="revision")
     if type(revision["schema_version"]) is not int or revision["schema_version"] != 1:
         raise core.LabError("Unsupported revision schema")
     if not isinstance(revision["prior_plan_id"], str) or not core.SHA256.fullmatch(revision["prior_plan_id"]):
@@ -43,7 +46,26 @@ def validate_revision(revision, graph):
         raise core.LabError("Unsupported revision phase or measurement reuse")
     if not isinstance(revision["reuse_note"], str) or not revision["reuse_note"]:
         raise core.LabError("Revision reuse scope is required")
+    if "prior_seal" in revision:
+        _validate_prior_seal(revision["prior_seal"])
     return revision
+
+
+def _validate_prior_seal(value):
+    core.fields(value, ("schema_version", "seal_sha256", "algorithm"), ("key_id",), label="prior seal")
+    if type(value["schema_version"]) is not int or value["schema_version"] != 1:
+        raise core.LabError("Unsupported prior seal schema")
+    if not isinstance(value["seal_sha256"], str) or core.SHA256.fullmatch(value["seal_sha256"]) is None:
+        raise core.LabError("Malformed prior seal hash")
+    if value["algorithm"] == "unsigned":
+        if "key_id" in value:
+            raise core.LabError("Unsigned prior seal has a key id")
+    elif value["algorithm"] == "hmac-sha256":
+        if "key_id" not in value or not isinstance(value["key_id"], str) or core.SHA256.fullmatch(value["key_id"]) is None:
+            raise core.LabError("Malformed prior seal key id")
+    else:
+        raise core.LabError("Unsupported prior seal algorithm")
+    return value
 
 
 def gate_evidence_trigger(semantic, text=None):
@@ -73,7 +95,7 @@ def gate_evidence_trigger(semantic, text=None):
             "evidence_origin": "observed", "evidence_refs": sorted(refs)}
 
 
-def replan_data(prior, resources, trigger, *, mission=None):
+def replan_data(prior, resources, trigger, *, mission=None, prior_run=None, allow_legacy_unsigned=False):
     validate_plan_record(prior)
     validate_trigger(trigger)
     if trigger["kind"] == "resource_change" and mission is not None and mission != prior["mission"]:
@@ -105,17 +127,29 @@ def replan_data(prior, resources, trigger, *, mission=None):
                            "reuse_note": "Eligibility only; recorded result identities must match. Timing/resource evidence is plan-specific.",
                            "invalidated_measurement_scope": "all schedule and performance observations",
                            "phase": "between execution batches"}
+    if prior_run is not None:
+        from .report import verify_integrity
+        checked, status = verify_integrity(prior_run, allow_legacy_unsigned=allow_legacy_unsigned)
+        parent_plan = core.read_json(checked / "plan.json")
+        if not isinstance(parent_plan, dict) or parent_plan.get("plan_id") != prior["plan_id"]:
+            raise core.LabError("Prior run does not belong to the prior plan")
+        updated["revision"]["prior_seal"] = seal.lineage_record(checked, status)
     return core.seal_plan(updated)
 
 
-def replan_to_output(plan_path, resources_path, trigger_path, out):
+def replan_to_output(plan_path, resources_path, trigger_path, out, *, allow_legacy_unsigned=False):
     trigger = core.read_json(trigger_path)
     # Requirement change includes its new mission in a separate declared reference.
     mission = None
     if isinstance(trigger, dict) and "mission_path" in trigger:
         trigger = dict(trigger)
         mission = core.load_mission(trigger.pop("mission_path"))
-    updated = replan_data(core.load_plan(plan_path), core.read_json(resources_path), trigger, mission=mission)
+    plan_file = Path(plan_path)
+    prior_run = None
+    if plan_file.name == "plan.json" and (plan_file.parent / "integrity.json").is_file() and (plan_file.parent / "semantic.json").is_file():
+        prior_run = plan_file.parent
+    updated = replan_data(core.load_plan(plan_path), core.read_json(resources_path), trigger, mission=mission,
+                          prior_run=prior_run, allow_legacy_unsigned=allow_legacy_unsigned)
     output = core.new_output(out)
     write_plan(updated, output)
     return output

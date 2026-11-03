@@ -1,0 +1,6 @@
+karpathy/llm.c README
+Source: https://github.com/karpathy/llm.c/blob/f1e2ace651495b74ae22d45d1723443fd00ecd3a/README.md
+
+Design interpretation: compare an implementation with a separately registered reference path and retain measured results. This controller does not reproduce upstream training or performance.
+
+No verbatim upstream passage is included. This note is a release-only transformation of the original local excerpt archive.

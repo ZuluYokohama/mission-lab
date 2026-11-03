@@ -56,12 +56,8 @@ def _rewrite_events(output, mutate):
 
 
 def _reseal(output):
-    manifest = core.read_json(output / "integrity.json")
-    manifest["files"] = {path.relative_to(output).as_posix(): core.file_hash(path)
-                         for path in output.rglob("*") if path.is_file() and path.name != "integrity.json"}
-    if "semantic_sha256" in manifest:
-        manifest["semantic_sha256"] = core.file_hash(output / "semantic.json")
-    (output / "integrity.json").write_text(core.canonical(manifest), encoding="utf-8", newline="\n")
+    from research.mission_lab_v0_1.seal import reseal
+    reseal(output)
 
 
 @pytest.fixture

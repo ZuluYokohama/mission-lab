@@ -105,12 +105,8 @@ def evidence_dir():
 
 
 def _reseal(run):
-    manifest = core.read_json(run / "integrity.json")
-    manifest["files"] = {path.relative_to(run).as_posix(): core.file_hash(path)
-                         for path in run.rglob("*") if path.is_file() and path.name != "integrity.json"}
-    if "semantic_sha256" in manifest:
-        manifest["semantic_sha256"] = core.file_hash(run / "semantic.json")
-    (run / "integrity.json").write_text(core.canonical(manifest), encoding="utf-8", newline="\n")
+    from research.mission_lab_v0_1.seal import reseal
+    reseal(run)
 
 
 def test_spend_ceiling_is_per_side_and_has_no_float():
@@ -377,6 +373,7 @@ def test_scheduler_refuses_a_launch_that_would_exceed_the_remaining_budget(evide
     plan["plan_id"] = core.seal_plan(plan)["plan_id"]
     # The planner would refuse this profile. The patch keeps that refusal out of
     # the executor's plan check so the launch gate has to enforce the cap itself.
+    original_validate = planner.validate_plan_record
     monkeypatch.setattr(planner, "validate_plan_record", lambda value: value)
     launched = []
     real_popen = executor.subprocess.Popen
@@ -403,7 +400,7 @@ def test_scheduler_refuses_a_launch_that_would_exceed_the_remaining_budget(evide
     assert ledger["totals"]["accounted"]["spend"] == 39
     assert ledger["limits"]["max_requests"] == 1
     assert ledger["totals"]["remaining"]["requests"] == 0
-    monkeypatch.undo()
+    monkeypatch.setattr(planner, "validate_plan_record", original_validate)
     with pytest.raises(core.LabError, match="declared model budget"):
         report.replay_run(output)
 

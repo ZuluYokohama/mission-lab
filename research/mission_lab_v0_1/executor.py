@@ -13,10 +13,10 @@ import time
 import datetime as dt
 import platform
 
-from .core import (ARCHIVE, FORCED_WORKER_ENV, LabError, REVISIONS, ROOT, SHA256, WORKSPACE, canonical, confined_path,
-                   digest_object, fields, file_hash, load_plan, new_output, platform_env_names, read_json, verify_sources,
-                   worker_environment, write_json)
-from . import grok
+from .core import (ARCHIVE, CONTROLLER_KEY_ENV, FORCED_WORKER_ENV, LabError, REVISIONS, ROOT, SHA256, WORKSPACE, canonical,
+                   confined_path, digest_object, fields, file_hash, load_plan, new_output, platform_env_names, read_json,
+                   verify_sources, worker_environment, write_json)
+from . import grok, seal
 from .budget import (account_record, add_cost, exceeds, ledger_for, reservation_for, reservation_numbers,
                      settled_actual, within_reservation, zero_cost)
 from .operators import required_buffer
@@ -187,38 +187,56 @@ def _gates_passed(results, nodes):
 def _check_resume(plan, resume_of):
     if resume_of is None:
         return None
-    fields(resume_of, ("plan_id", "prior_semantic_sha256"), label="resume record")
+    fields(resume_of, ("plan_id", "prior_semantic_sha256", "prior_seal_sha256"), ("prior_seal_key_id",), label="resume record")
     prior = resume_of["prior_semantic_sha256"]
-    if resume_of["plan_id"] != plan["plan_id"] or not isinstance(prior, str) or SHA256.fullmatch(prior) is None:
+    seal_hash = resume_of["prior_seal_sha256"]
+    if (resume_of["plan_id"] != plan["plan_id"] or not isinstance(prior, str) or SHA256.fullmatch(prior) is None or
+            not isinstance(seal_hash, str) or SHA256.fullmatch(seal_hash) is None):
         raise LabError("Resume record does not match the plan")
-    return {"plan_id": resume_of["plan_id"], "prior_semantic_sha256": prior}
+    record = {"plan_id": resume_of["plan_id"], "prior_semantic_sha256": prior, "prior_seal_sha256": seal_hash}
+    if "prior_seal_key_id" in resume_of:
+        key_id = resume_of["prior_seal_key_id"]
+        if not isinstance(key_id, str) or SHA256.fullmatch(key_id) is None:
+            raise LabError("Resume record has a malformed prior seal key id")
+        record["prior_seal_key_id"] = key_id
+    return record
 
 
 def run_plan(plan_path, out):
     return run_plan_data(load_plan(plan_path), out)
 
 
-def resume_run(prior_run, out, approval):
+def resume_run(prior_run, out, approval, *, allow_legacy_unsigned=False):
     """Run the same plan again after copying one approval record into the new run.
 
-    The prior run stays sealed. Succeeded workers are not reused. The approval
-    file is not authenticated.
+    The prior run stays sealed. Succeeded workers are not reused. The new run
+    records the parent integrity file's hash. An approval signature is checked
+    only when the gate lists approver key ids.
     """
     from .report import verify_integrity
-    prior = verify_integrity(prior_run)
+    prior, status = verify_integrity(prior_run, allow_legacy_unsigned=allow_legacy_unsigned)
     plan = load_plan(prior / "plan.json")
     record = read_json(approval) if not isinstance(approval, dict) else approval
     if not isinstance(record, dict) or not isinstance(record.get("gate_id"), str):
         raise LabError("Approval record must name a gate")
     prior_semantic = read_json(prior / "semantic.json")
-    return run_plan_data(plan, out, approvals={record["gate_id"]: record}, resume_of={
-        "plan_id": plan["plan_id"], "prior_semantic_sha256": digest_object(prior_semantic)})
+    resume_of = {
+        "plan_id": plan["plan_id"],
+        "prior_semantic_sha256": digest_object(prior_semantic),
+        "prior_seal_sha256": file_hash(prior / "integrity.json"),
+    }
+    if status.get("key_id"):
+        resume_of["prior_seal_key_id"] = status["key_id"]
+    return run_plan_data(plan, out, approvals={record["gate_id"]: record}, resume_of=resume_of)
 
 
 def run_plan_data(plan, out, *, approvals=None, resume_of=None):
+    seal_key = seal.require_seal_key()
     nodes = _check_plan(plan)
     _check_inputs(plan)
     resume_of = _check_resume(plan, resume_of)
+    from .gates import prepare_approver_keys
+    prepare_approver_keys(plan["graph"])
     directory = new_output(out)
     resource_contract = "registered worker slots and explicit input buffers; an llm:grok task reserves only declared prompt or fixture bytes and caps the response separately; a gate reserves neither a read buffer nor a model budget and is evaluated by the controller; controller integrity checks, process overhead, RSS, cores and energy are outside this reservation"
     if "model_budget" in plan["resources"]:
@@ -230,7 +248,8 @@ def run_plan_data(plan, out, *, approvals=None, resume_of=None):
         "worker_environment": {
             "schema_version": 1, "default": "deny", "platform_names": list(platform_env_names()),
             "forced_names": sorted(FORCED_WORKER_ENV), "values_recorded": False,
-            "note": "Workers receive platform_names when those variables are set, the forced interpreter flags, and resource-profile grants for that task. Other controller variables are not passed. Values are not recorded.",
+            "withheld_controller_key_names": sorted(CONTROLLER_KEY_ENV),
+            "note": "Workers receive platform_names when those variables are set, the forced interpreter flags, and resource-profile grants for that task. Controller key variables cannot be granted and are not passed. Other controller variables are not passed. Values are not recorded. Refusing a key name is not a file-permission check.",
         },
     })
     private = directory / "private"
@@ -560,6 +579,7 @@ def run_plan_data(plan, out, *, approvals=None, resume_of=None):
         semantic["revision"] = plan["revision"]
     if resume_of is not None:
         semantic["resume_of"] = resume_of
+    semantic["seal"] = seal.claim(seal_key)
     write_json(directory / "semantic.json", semantic)
     write_json(directory / "observations.json", observations)
     write_json(directory / "validation.json", validation)
@@ -572,7 +592,5 @@ def run_plan_data(plan, out, *, approvals=None, resume_of=None):
         write_json(directory / "manifest.json", results[final_nodes[0]["id"]]["output"])
     from .report import render_report
     (directory / "report.md").write_text(render_report(semantic, observations), encoding="utf-8", newline="\n")
-    files = {path.relative_to(directory).as_posix(): file_hash(path) for path in sorted(directory.rglob("*")) if path.is_file()}
-    write_json(directory / "integrity.json", {"schema_version": 1, "files": files, "semantic_sha256": file_hash(directory / "semantic.json"),
-                                             "hash_note": "Integrity only; not source authenticity or proof of semantic truth"})
+    seal.write_integrity(directory, seal_key, semantic_sha256=file_hash(directory / "semantic.json"), hash_note=seal.HASH_NOTE)
     return directory
