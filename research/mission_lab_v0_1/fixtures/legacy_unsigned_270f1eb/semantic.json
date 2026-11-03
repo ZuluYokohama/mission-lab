@@ -1,0 +1,96 @@
+{
+  "accepted": true,
+  "mission_id": "legacy_fixture",
+  "plan_id": "6aee297831fcb5866440bb0b4c7ed0b5eba137efd99fd4fe74256285fb7696ee",
+  "profile": {
+    "bindings": {
+      "hash:alpha": {
+        "buffer_bytes": 3,
+        "candidate": "whole_v1",
+        "duration_ns": 1003,
+        "revision": "1"
+      },
+      "manifest": {
+        "buffer_bytes": 0,
+        "candidate": "manifest_v1",
+        "duration_ns": 1000,
+        "revision": "1"
+      },
+      "reference:alpha": {
+        "buffer_bytes": 3,
+        "candidate": "reference_v1",
+        "duration_ns": 1009,
+        "revision": "1"
+      },
+      "verify:alpha": {
+        "buffer_bytes": 0,
+        "candidate": "compare_v1",
+        "duration_ns": 1000,
+        "revision": "1"
+      }
+    },
+    "estimate_origin": "injected_fixture",
+    "resources": {
+      "cost_model": {
+        "fixed_task_ns": 1000,
+        "reference_ns_per_byte": 3,
+        "stream_ns_per_byte": 2,
+        "whole_ns_per_byte": 1
+      },
+      "estimate_origin": "injected_fixture",
+      "read_buffer_bytes": 65536,
+      "schema_version": 1,
+      "timeout_seconds": 60,
+      "workers": 1
+    },
+    "schedule_algorithm": "coordinate-list-v2; critical-path-first feasible list scheduling; multi-seed single- and pairwise-candidate coordinate search; makespan then total-work then candidate-ID tie break"
+  },
+  "schema_version": 1,
+  "tasks": [
+    {
+      "error": null,
+      "output": {
+        "input_id": "alpha",
+        "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "size_bytes": 3
+      },
+      "status": "succeeded",
+      "task_id": "hash:alpha"
+    },
+    {
+      "error": null,
+      "output": {
+        "artifacts": [
+          {
+            "input_id": "alpha",
+            "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            "size_bytes": 3
+          }
+        ]
+      },
+      "status": "succeeded",
+      "task_id": "manifest"
+    },
+    {
+      "error": null,
+      "output": {
+        "input_id": "alpha",
+        "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "size_bytes": 3
+      },
+      "status": "succeeded",
+      "task_id": "reference:alpha"
+    },
+    {
+      "error": null,
+      "output": {
+        "input_id": "alpha",
+        "passed": true,
+        "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "size_bytes": 3
+      },
+      "status": "succeeded",
+      "task_id": "verify:alpha"
+    }
+  ]
+}

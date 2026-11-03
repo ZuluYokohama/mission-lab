@@ -1,0 +1,13 @@
+{
+  "archived_inputs": true,
+  "inputs": [
+    {
+      "archived": true,
+      "id": "alpha",
+      "path": "/tmp/legacy-src/research/mission_lab_v0_1/fixtures/abc.bin",
+      "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      "size_bytes": 3,
+      "snapshot": "input_snapshot/0.bin"
+    }
+  ]
+}

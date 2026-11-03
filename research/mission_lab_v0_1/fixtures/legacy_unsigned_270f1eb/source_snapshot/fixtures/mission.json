@@ -1,0 +1,37 @@
+{
+  "inputs": [
+    {
+      "id": "empty",
+      "path": "empty.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0
+    },
+    {
+      "id": "abc",
+      "path": "abc.bin",
+      "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      "size_bytes": 3
+    },
+    {
+      "id": "pattern",
+      "path": "pattern.bin",
+      "sha256": "909d26d209cbd700c2e7266ec398959cd4fff4aab86f531e4912f58ca1a02c2a",
+      "size_bytes": 131073
+    }
+  ],
+  "mission_id": "file-audit-demo",
+  "requirements": [
+    {
+      "acceptance_criteria": [
+        "Exact SHA-256 and byte count",
+        "Independent sequential reference agreement",
+        "Explicit resource reservations"
+      ],
+      "evidence_refs": [],
+      "id": "exact-audit",
+      "text": "Audit each declared file without changing it."
+    }
+  ],
+  "schema_version": 1,
+  "unresolved": []
+}

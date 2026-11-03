@@ -51,7 +51,7 @@ def run_demo(out):
     tight = {**baseline["resources"], "read_buffer_bytes": 65536}
     trigger = {"schema_version": 1, "kind": "resource_change", "text": "Injected available read-buffer reservation reduced to 64 KiB.",
                "evidence_origin": "injected_demo", "evidence_refs": []}
-    revised = replan_data(baseline, tight, trigger)
+    revised = replan_data(baseline, tight, trigger, prior_run=baseline_run)
     write_plan(revised, core.new_output(output / "revised_plan"))
     revised_run = run_plan_data(revised, output / "revised_run")
     before, after = replay_run(baseline_run), replay_run(revised_run)

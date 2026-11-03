@@ -1,0 +1,367 @@
+{
+  "bindings": {
+    "hash:alpha": {
+      "buffer_bytes": 3,
+      "candidate": "whole_v1",
+      "duration_ns": 1003,
+      "revision": "1"
+    },
+    "manifest": {
+      "buffer_bytes": 0,
+      "candidate": "manifest_v1",
+      "duration_ns": 1000,
+      "revision": "1"
+    },
+    "reference:alpha": {
+      "buffer_bytes": 3,
+      "candidate": "reference_v1",
+      "duration_ns": 1009,
+      "revision": "1"
+    },
+    "verify:alpha": {
+      "buffer_bytes": 0,
+      "candidate": "compare_v1",
+      "duration_ns": 1000,
+      "revision": "1"
+    }
+  },
+  "enumerated_bindings": 2,
+  "estimated_makespan_ns": 4012,
+  "graph": [
+    {
+      "depends_on": [],
+      "id": "hash:alpha",
+      "input_id": "alpha",
+      "operation": "sha256",
+      "outputs": [
+        "output:hash:alpha"
+      ],
+      "state_reads": [],
+      "state_writes": [
+        "output:hash:alpha"
+      ]
+    },
+    {
+      "depends_on": [
+        "verify:alpha"
+      ],
+      "id": "manifest",
+      "operation": "assemble_manifest",
+      "outputs": [
+        "output:manifest"
+      ],
+      "state_reads": [
+        "output:verify:alpha"
+      ],
+      "state_writes": [
+        "output:manifest"
+      ]
+    },
+    {
+      "depends_on": [],
+      "id": "reference:alpha",
+      "input_id": "alpha",
+      "operation": "reference_sha256",
+      "outputs": [
+        "output:reference:alpha"
+      ],
+      "state_reads": [],
+      "state_writes": [
+        "output:reference:alpha"
+      ]
+    },
+    {
+      "depends_on": [
+        "hash:alpha",
+        "reference:alpha"
+      ],
+      "id": "verify:alpha",
+      "input_id": "alpha",
+      "operation": "verify_digest",
+      "outputs": [
+        "output:verify:alpha"
+      ],
+      "state_reads": [
+        "output:hash:alpha",
+        "output:reference:alpha"
+      ],
+      "state_writes": [
+        "output:verify:alpha"
+      ]
+    }
+  ],
+  "human_review": false,
+  "machine_validation": true,
+  "mission": {
+    "inputs": [
+      {
+        "id": "alpha",
+        "path": "/tmp/legacy-src/research/mission_lab_v0_1/fixtures/abc.bin",
+        "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "size_bytes": 3
+      }
+    ],
+    "mission_id": "legacy_fixture",
+    "requirements": [
+      {
+        "acceptance_criteria": [
+          "Exact digest and byte count agree"
+        ],
+        "evidence_refs": [],
+        "id": "identity",
+        "text": "Verify the fixture bytes"
+      }
+    ],
+    "schema_version": 1,
+    "unresolved": []
+  },
+  "mission_identity": "477dabd49d28762c4b4501058875fb96d040260058b5df0aeb077739a848cdaf",
+  "objective": "lowest estimated completion time among the feasible schedules this coordinate search constructs; not an enumeration of every binding combination",
+  "obligations": [
+    {
+      "checks": [
+        "registered operation and revision",
+        "declared resource reservations",
+        "dependency and ownership"
+      ],
+      "functional_check": "exact hash and byte count against declared input and sequential reference",
+      "requirement_ids": [
+        "identity"
+      ],
+      "requirement_semantics": "prose retained for human alignment; not automatically assessed",
+      "task_id": "hash:alpha"
+    },
+    {
+      "checks": [
+        "registered operation and revision",
+        "declared resource reservations",
+        "dependency and ownership"
+      ],
+      "functional_check": "exact hash and byte count against declared input and sequential reference",
+      "requirement_ids": [
+        "identity"
+      ],
+      "requirement_semantics": "prose retained for human alignment; not automatically assessed",
+      "task_id": "manifest"
+    },
+    {
+      "checks": [
+        "registered operation and revision",
+        "declared resource reservations",
+        "dependency and ownership"
+      ],
+      "functional_check": "exact hash and byte count against declared input and sequential reference",
+      "requirement_ids": [
+        "identity"
+      ],
+      "requirement_semantics": "prose retained for human alignment; not automatically assessed",
+      "task_id": "reference:alpha"
+    },
+    {
+      "checks": [
+        "registered operation and revision",
+        "declared resource reservations",
+        "dependency and ownership"
+      ],
+      "functional_check": "exact hash and byte count against declared input and sequential reference",
+      "requirement_ids": [
+        "identity"
+      ],
+      "requirement_semantics": "prose retained for human alignment; not automatically assessed",
+      "task_id": "verify:alpha"
+    }
+  ],
+  "operator_contracts": {
+    "assemble_manifest": {
+      "candidates": {
+        "manifest_v1": "1"
+      },
+      "effects": "read dependencies; own one staged manifest",
+      "input_type": "verified_digest_records",
+      "output_type": "artifact_manifest",
+      "postconditions": [
+        "exactly one digest/size row per input"
+      ],
+      "preconditions": [
+        "all input verifications succeeded"
+      ],
+      "schema_version": 1
+    },
+    "gate": {
+      "candidates": {
+        "predicate_v1": "1"
+      },
+      "effects": "controller evaluates the predicate in-process; no worker and no arbitrary code",
+      "input_type": "dependency_receipts",
+      "output_type": "gate_receipt",
+      "postconditions": [
+        "receipt outcome is pass, fail, indeterminate, or pending",
+        "fail, indeterminate, and pending do not launch downstream nodes"
+      ],
+      "preconditions": [
+        "one or more direct dependencies",
+        "a closed predicate over those receipts",
+        "no read-buffer reservation and no model-budget reservation"
+      ],
+      "schema_version": 1
+    },
+    "llm:grok": {
+      "candidates": {
+        "chat_v1": "1"
+      },
+      "effects": "one chat completion call or one local fixture read; own one staged receipt and response artifacts",
+      "input_type": "prompt_text_or_file_artifact_ref",
+      "output_type": "grok_chat_receipt",
+      "postconditions": [
+        "receipt records model, parameters, request and response hashes, reported token usage, latency, and HTTP status",
+        "response content is stored as a hash-addressed artifact",
+        "the API key is not recorded"
+      ],
+      "preconditions": [
+        "declared grok model id and bounded generation parameters",
+        "exactly one inline prompt or confined prompt file",
+        "transport xai has an XAI_API_KEY grant, or transport fixture has a confined response file",
+        "request timeout is at least one second below the profile timeout",
+        "when a resource profile declares a model budget, that budget prices this model and the worst-case reservation fits"
+      ],
+      "schema_version": 1
+    },
+    "reference_sha256": {
+      "candidates": {
+        "reference_v1": "1"
+      },
+      "effects": "read declared file; own one staged result",
+      "input_type": "file_artifact_ref",
+      "output_type": "digest_record",
+      "postconditions": [
+        "separate sequential read agrees with declared digest"
+      ],
+      "preconditions": [
+        "declared file identity",
+        "8 KiB maximum read buffer"
+      ],
+      "schema_version": 1
+    },
+    "sha256": {
+      "candidates": {
+        "stream_v1": "1",
+        "whole_v1": "1"
+      },
+      "effects": "read declared file; own one staged result",
+      "input_type": "file_artifact_ref",
+      "output_type": "digest_record",
+      "postconditions": [
+        "exact declared digest and byte count"
+      ],
+      "preconditions": [
+        "declared file identity",
+        "buffer reservation fits"
+      ],
+      "schema_version": 1
+    },
+    "verify_digest": {
+      "candidates": {
+        "compare_v1": "1"
+      },
+      "effects": "read dependencies; own one staged result",
+      "input_type": "candidate_and_reference_digest_records",
+      "output_type": "verified_digest_record",
+      "postconditions": [
+        "exact equality with declared input; passed is true"
+      ],
+      "preconditions": [
+        "both dependencies succeeded for same input"
+      ],
+      "schema_version": 1
+    }
+  },
+  "plan_id": "6aee297831fcb5866440bb0b4c7ed0b5eba137efd99fd4fe74256285fb7696ee",
+  "planner": {
+    "id": "coordinate-list-v2",
+    "version": 2
+  },
+  "resources": {
+    "cost_model": {
+      "fixed_task_ns": 1000,
+      "reference_ns_per_byte": 3,
+      "stream_ns_per_byte": 2,
+      "whole_ns_per_byte": 1
+    },
+    "estimate_origin": "injected_fixture",
+    "read_buffer_bytes": 65536,
+    "schema_version": 1,
+    "timeout_seconds": 60,
+    "workers": 1
+  },
+  "schedule": [
+    {
+      "end_ns": 1009,
+      "start_ns": 0,
+      "task_id": "reference:alpha"
+    },
+    {
+      "end_ns": 2012,
+      "start_ns": 1009,
+      "task_id": "hash:alpha"
+    },
+    {
+      "end_ns": 3012,
+      "start_ns": 2012,
+      "task_id": "verify:alpha"
+    },
+    {
+      "end_ns": 4012,
+      "start_ns": 3012,
+      "task_id": "manifest"
+    }
+  ],
+  "schedule_algorithm": "coordinate-list-v2; critical-path-first feasible list scheduling; multi-seed single- and pairwise-candidate coordinate search; makespan then total-work then candidate-ID tie break",
+  "schema_version": 1,
+  "sources": {
+    "@research/__init__.py": "a1c3f1716c99260ef5caaf29bb7be7d9cb06d57c5ef9fba2909780d1a446d6de",
+    "ARCHITECTURE.mmd": "9aca992a41fbd0586081c8e62614a0d0e2e12700fbde8b4a42047557a35ef551",
+    "CONTRACT.md": "453ca0d5ae96a67f1b426c5a190a0b011eb0d6003301fa40b88a8161c898658b",
+    "LICENSE.md": "ffcca38841adb694b6f380647e15f17c446a4d1656fed51a1e2041d064c94cc8",
+    "LLM_SYSTEMS_MAP.md": "8201189716ec9dfd9a9369ab809e54c6e8983da03a04252b92e08f50fef590b1",
+    "NOTICE.md": "4fdd9f64d79e2d0d8d543d610df336f6135e5ae85bc9578c1bde4b887914161f",
+    "PROTOCOL.md": "e0edab149d909cf76815bdfd73f2fa6bd9b0ed584d71ddae26e28a32bac3a2f2",
+    "README.md": "484e50f14b0d966cdc473e7252774d7e25316b98638aa730db37afc9937a6e0f",
+    "SOURCES.json": "87e7e43cad71c323c45bae7510b08859e0d1e41f3e58dbab1a42111a267f369a",
+    "__init__.py": "1b530a0e3f7118ee9d668565e4dfb1c6883d4c7e1557425a25d1499079ab5281",
+    "__main__.py": "339f7d9f1a1d9503bff781e9333355b0b3d338dd4e072d579b726278ed8b3462",
+    "budget.py": "783626c56f030741d634061325904d8ed2ffa86c5dc3650fa5f6078af9dc42a6",
+    "core.py": "cd99b4387bb7a00b99e83a2a8e0f03ba7ad2f99311526ed5615bcfafa105e96e",
+    "demo.py": "09f38ee923362c9a7f6dd7dda14efe746a4ea87f1fdc8838faaa95a4ac36a36a",
+    "executor.py": "4123371ca5ae463f61c02cfbfc115e6a2c4cc9f0b1d7126ce32ce69b651adf3e",
+    "fixtures/abc.bin": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    "fixtures/empty.bin": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "fixtures/grok_gate_response.json": "4322d7b03f79255f2d1f1cf3a5f5be15fafff68adc0d3636abffc6b2c46864f6",
+    "fixtures/mission.json": "00cbbcc21ef174c36449e64715b42295f677bf4ce1c6a3006e4a98acc959cd0a",
+    "fixtures/mission_gate.json": "ceea5219195095490ae0b364e36f9ef9c3a958cdd4253b58b9b9ec87a5ba7e64",
+    "fixtures/pattern.bin": "909d26d209cbd700c2e7266ec398959cd4fff4aab86f531e4912f58ca1a02c2a",
+    "fixtures/resources.json": "5a5a646a6883e116297fed66981443baf734e2423c5e23a327a3965ac06856c6",
+    "fixtures/resources_model.json": "c95039fc1e32c5bcfa85fd853289e56d2b40d1a5784318305381c2b1e1cc1c95",
+    "fixtures/resources_model_tight.json": "2b2962900d65ad9f6fc5b86224c07c9011a87b87cf435081114f66c846b125b4",
+    "fixtures/resources_tight.json": "d7a0f323b72fdcb09591f4e2c71e06cff4ac2045d56929a2c630269e88828e1e",
+    "gates.py": "e59efb634429f1209a99a344b42eee56b6674620fd8138abc6705715516b9601",
+    "grok.py": "2c98ce9bd1f7ed1c2c95ec40bda966c9d5dc3283ba8756839331225f8ef47426",
+    "inventory.py": "f4c516d9a37ca54b777fa8e1a818b9409e21cf8b0cbe7a1ecdacaa271b2ba11e",
+    "operators.py": "699bf5804a1e1a214b585ab6d539b78dbff8ff5015404f5df142bee333347064",
+    "planner.py": "5df778862254c6c8a2688b3918a20bbcaa8eb2780c3c8cb9578dd859dbb4a834",
+    "provenance/autoresearch_note.txt": "fe1cf51a0d47853193fc70b6f528fb634cf4e790be63c50c1c922af6121b86a6",
+    "provenance/jpl_state_analysis_note.txt": "dda47530860e38f510a9716c5fdb16db9dfceb0e2d1e781983f73d33c4b80d3f",
+    "provenance/llmc_note.txt": "1c7231e509b45117915e036d87981353c49cb2d5b77f1b5fc5699294e9648220",
+    "provenance/micrograd_note.txt": "2b73a2f6449382a747d566fb031c626d80d8552109889f3f124488ab73e0be4d",
+    "replan.py": "d6a28abac61cbff002d34b7b7e215d0cbb4bc6511b82d93de00e9d1f0cb68e1b",
+    "report.py": "22ed8820b0126aa13d0e7c0c3e35a0144f8bd8968a3b5146f169594df57c62fd",
+    "tests/test_budget.py": "9ce4078d7157f88db3c9af9dd1c2630439537a7e01c4545e6a8695f23bba6eac",
+    "tests/test_controller.py": "b03ed175026d393a09b1b763b6ef22bfc377dcb6a0db2a6f9f33a0fa4c53ddde",
+    "tests/test_demo.py": "2078d679c7bd965ef24c9c0dec43c6f7da934ab13b5cb98610a33b6914f4c54d",
+    "tests/test_executor.py": "ecd1e64cbfdbdb4421f401d2193c9079623b480144e7ac50fc8d1ecad8e30f18",
+    "tests/test_gates.py": "9d9560084a23a51ea2013b2d51580ce9be384c68db99b37ddf0ba9501e44650a",
+    "tests/test_grok.py": "33017e1f3d1067bbe929475b1c6a7811f5da7903bc946baa73d274ec97cdc036",
+    "tests/test_inventory.py": "7398bf6537c60cb087fde66ca1c5a8c00da50953f6526ef5fab9ffc0ccc245ce",
+    "tests/test_planner.py": "4d54df36a9072699312cad59cea1c66b673ee744c12f438700dd0feba482f416",
+    "worker.py": "c318400dccf1857b0b295b3b9b69f7bad054a0f392f4c4ba9bd87a955bfcefd9"
+  }
+}

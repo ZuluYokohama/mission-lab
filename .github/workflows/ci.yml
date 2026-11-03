@@ -51,6 +51,8 @@ jobs:
         run: python -B -m pytest research/mission_lab_v0_1/tests -q -p no:cacheprovider
       - name: Validate the fixture specification
         run: python -B -m research.mission_lab_v0_1 validate --mission research/mission_lab_v0_1/fixtures/mission.json
+      - name: Generate a temporary seal key
+        run: python -B tools/ci_seal_key.py
       - name: Execute baseline and tighter-budget revision
         run: python -B -m research.mission_lab_v0_1 demo --out evidence/ci_demo
       - name: Replay baseline evidence
