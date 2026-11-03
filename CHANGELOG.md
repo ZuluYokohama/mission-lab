@@ -4,6 +4,10 @@ Changes here describe the repository, not completion of the independent V&V camp
 
 ## Unreleased
 
+- Add a registered `llm:grok` operator. A task declares a model id, an inline prompt or a confined prompt file, and bounds on output tokens, temperature, timeout, and response bytes. Transport `xai` calls `https://api.x.ai/v1/chat/completions` with urllib and a granted `XAI_API_KEY`. Transport `fixture` reads a declared file and does not use the network. Receipts store hashes, reported token usage, latency, and HTTP status, and never the key. Response text is a hash-addressed evidence artifact. Replay checks archived bytes and does not call the network.
+- Skip graph compilation for an unresolved mission that has no `worker_env`. An unresolved mission that declares grants is still compiled so an unknown grant fails closed, and it still returns `needs_clarification`.
+- Render retained task errors with sorted keys so a report regenerated from canonical JSON matches the report written at execution.
+- Reject an observation or launch event whose environment names differ, including an allowed platform name present on only one of those records. Replay a launch that failed because a granted variable was unset.
 - Stop registered workers from inheriting the controller process environment. Launch them with a platform start allowlist, two forced interpreter flags, and per-task resource grants. Reject undeclared grant names at validation. Record environment names, not values, on launch events and observations.
 - On Windows, match worker environment names without regard to case and record them in uppercase, so a case variant cannot grant a reserved name or copy a variable that was not granted.
 - Add contributor, security, development, review and roadmap documentation.

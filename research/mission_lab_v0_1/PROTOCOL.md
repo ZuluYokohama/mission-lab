@@ -2,7 +2,7 @@
 
 ## Objective and scope
 
-Demonstrate a controller that preserves an explicit mission and verifiable outputs when declared execution resources change. The system under control is a closed file-hashing operator DAG and its worker processes. The controller maintains validated plans, estimates, observations, goal checks and revision lineage. OODA is the organizing loop; completion and correctness are evaluated through explicit predicates.
+Demonstrate a controller that preserves an explicit mission and verifiable outputs when declared execution resources change. The system under control is a closed operator DAG and its worker processes. Registered work is file hashing, digest verification, one manifest, and an optional `llm:grok` chat receipt. The controller maintains validated plans, estimates, observations, goal checks and revision lineage. OODA is the organizing loop; completion and correctness are evaluated through explicit predicates.
 
 Prior exposure is disclosed: the implementation followed discussion of LLM operators, local ATFT findings, an existing documentary coherence pilot, and public harness designs. This is an exploratory local registration. It is not a prospective preregistration of previously observed ATFT findings and makes no claim of blind analysis or independent human review.
 
@@ -28,7 +28,7 @@ Freeze each plan by hashing the mission, resource profile, graph, bindings, esti
 
 Only own Python worker subprocesses execute the registered operations. The controller does not pass its process environment through. Each worker receives the platform start allowlist, two forced interpreter flags, and environment names the resource profile grants to that task. On Windows those names are matched without regard to case and recorded in uppercase. Evidence records those names and omits values. An unset grant fails that task before launch. Retain observations, task outputs, exit statuses, timeouts, errors, dispatch events and declared reservations. Failed dependencies block downstream work. A successful worker status must agree with its actual return code and validated output schema. Kill and reap timed-out workers through the executor's own process handles.
 
-Compare primary and reference SHA-256 values with each other and the mission input identity. Assemble a manifest only from successful verifications. Check goal predicates and resource reservations against retained events. Replay reconstructs recorded conclusions offline and detects altered evidence. It does not rerun a model or fabricate omitted observations.
+Compare primary and reference SHA-256 values with each other and the mission input identity. Assemble a manifest only from successful verifications. An `llm:grok` task either posts one non-streaming Chat Completions request to `https://api.x.ai/v1/chat/completions` or reads one declared fixture file. The API key reaches only a task granted `XAI_API_KEY`. The receipt stores hashes, provider-reported token counts, latency, and HTTP status. Assistant text is an evidence artifact addressed by hash. The receipt does not score that text. Check goal predicates and resource reservations against retained events. Replay reconstructs recorded conclusions offline and detects altered evidence. It does not call the network or fabricate omitted observations.
 
 ## Fixed demonstration
 
@@ -38,7 +38,7 @@ Accept digest agreement, bounded reservation accounting, explicit lineage, repla
 
 ## Extension gates
 
-Before activating later LLM work, establish artifact lineage, source/operator version, permissions, compatible execution environment, numerical tolerances, task scorer and cost boundary. Strict causality and operator identity require separate gates. Trained operators and post-hoc analysis instruments need separate contracts.
+A remote chat receipt is now a registered operator under the bounds in CONTRACT.md. That registration does not activate local weights, a forward pass, a sampler, a trainer, a task scorer, or the geometry checks below. Prompt and fixture files still pass through the hash and verification path. Replay checks archived hashes and does not open a socket. Numerical tolerances beyond the declared temperature grid, timeout, and byte caps are not claimed. Strict causality and operator identity for later instruments still require separate gates. Trained operators and post-hoc analysis instruments need separate contracts.
 
 For geometry experiments, test rank-deficient Procrustes completions, paired-prompt conventions, held-out transport, dimension and basis sensitivity, metric definitions and causal interventions. A projected fitted linear map is not automatically the full nonlinear Jacobian. Spectral similarity alone does not establish semantic truth, sentience, hidden actors, universal mechanisms, or deployment savings.
 

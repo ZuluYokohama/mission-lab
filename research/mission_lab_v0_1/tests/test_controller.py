@@ -558,6 +558,28 @@ def test_clarification_stops_compilation_without_fabricating_human_review(planni
     assert "schedule" not in record
 
 
+def test_unresolved_mission_without_worker_env_skips_graph_compilation(planning, monkeypatch):
+    planner, mission, profile = planning
+    mission["unresolved"] = [{"id": "acceptance-gap", "question": "Which output must be preserved?", "affects": "acceptance"}]
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("compile_graph should not run")
+
+    monkeypatch.setattr(planner, "compile_graph", boom)
+    record = planner.build_plan(mission, profile)
+    assert record["status"] == "needs_clarification"
+    assert "schedule" not in record
+
+
+def test_unresolved_mission_with_a_known_grant_still_needs_clarification(planning):
+    planner, mission, profile = planning
+    profile["worker_env"] = {"declared": ["ALPHA_TOKEN"], "grants": {"hash:sample": ["ALPHA_TOKEN"]}}
+    mission["unresolved"] = [{"id": "acceptance-gap", "question": "Which output must be preserved?", "affects": "acceptance"}]
+    record = planner.build_plan(mission, profile)
+    assert record["status"] == "needs_clarification"
+    assert "plan_id" not in record
+
+
 @pytest.mark.parametrize("tamper", ["human_review", "machine_validation", "binding", "schedule", "code"])
 def test_resealing_does_not_make_malformed_plan_authoritative(planning, tamper):
     planner, mission, profile = planning

@@ -1,10 +1,10 @@
-"""Closed registry of bounded local artifact operators; no arbitrary code jobs."""
+"""Closed registry of bounded registered operators; no arbitrary code jobs."""
 from __future__ import annotations
 
 import hashlib
 from pathlib import Path
 
-from .core import LabError, REVISIONS, SHA256, fields, identifier, integer, strings
+from .core import LabError, REVISIONS, SHA256, fields, identifier, integer, strings, validate_node_record
 
 
 REGISTRY = {
@@ -12,12 +12,16 @@ REGISTRY = {
     "reference_sha256": {"reference_v1"},
     "verify_digest": {"compare_v1"},
     "assemble_manifest": {"manifest_v1"},
+    "llm:grok": {"chat_v1"},
 }
 
 
-def required_buffer(operation, candidate, artifact=None):
+def required_buffer(operation, candidate, artifact=None, *, node=None, inputs=None):
     if not isinstance(operation, str) or not isinstance(candidate, str) or operation not in REGISTRY or candidate not in REGISTRY[operation]:
         raise LabError("Unregistered operation/candidate combination")
+    if operation == "llm:grok":
+        from .grok import read_reservation
+        return read_reservation(node, inputs if inputs is not None else {})
     if operation in {"verify_digest", "assemble_manifest"}:
         return 0
     if not isinstance(artifact, dict) or type(artifact.get("size_bytes")) is not int:
@@ -95,11 +99,11 @@ def _finish_digest(artifact, path, before, size, digest):
 
 
 def execute_operation(job):
-    fields(job, ("schema_version", "node", "binding", "input", "dependencies"), label="worker job")
+    fields(job, ("schema_version", "node", "binding", "input", "dependencies"), ("fixture", "captures"), label="worker job")
     if type(job["schema_version"]) is not int or job["schema_version"] != 1:
         raise LabError("Unsupported worker job schema")
     node = job["node"]
-    fields(node, ("id", "operation", "depends_on", "outputs", "state_reads", "state_writes"), ("input_id",), "worker node")
+    validate_node_record(node)
     identifier(node["id"], "worker task id")
     for key in ("depends_on", "outputs", "state_reads", "state_writes"):
         strings(node[key], "worker " + key)
@@ -119,7 +123,13 @@ def execute_operation(job):
             raise LabError("Worker input identity/path mismatch")
         if not isinstance(artifact["sha256"], str) or not SHA256.fullmatch(artifact["sha256"]):
             raise LabError("Malformed worker input SHA256")
-    needed = required_buffer(node["operation"], candidate, artifact)
+    known = {}
+    if isinstance(artifact, dict) and isinstance(artifact.get("id"), str):
+        known[artifact["id"]] = artifact
+    fixture = job.get("fixture")
+    if isinstance(fixture, dict) and isinstance(fixture.get("id"), str):
+        known[fixture["id"]] = fixture
+    needed = required_buffer(node["operation"], candidate, artifact, node=node, inputs=known)
     if type(job["binding"]["buffer_bytes"]) is not int or job["binding"]["buffer_bytes"] != needed:
         raise LabError("Binding read-buffer reservation does not match registered operator")
     operation = node["operation"]
@@ -130,6 +140,11 @@ def execute_operation(job):
         fields(value, ("task_id", "status", "output", "error"), label="worker dependency result")
         if value["task_id"] != task_id or value["status"] != "succeeded" or value["error"] is not None or not isinstance(value["output"], dict):
             raise LabError("Operator requires successful dependencies")
+    if operation != "llm:grok" and ("fixture" in job or "captures" in job):
+        raise LabError("Only llm:grok jobs may carry fixture inputs or capture paths")
+    if operation == "llm:grok":
+        from .grok import execute as execute_grok
+        return execute_grok(job)
     if operation in {"sha256", "reference_sha256"}:
         if dependencies:
             raise LabError("Digest operators do not consume dependency state")

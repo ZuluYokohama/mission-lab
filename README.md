@@ -1,6 +1,6 @@
 # Mission Lab v0.1 — experimental public preview
 
-Mission Lab connects a structured file-audit specification to an operator DAG, a bounded resource schedule, worker execution, verification receipts and evidence-driven revision. It runs registered SHA-256 and manifest operations. Runtime uses only the Python standard library.
+Mission Lab connects a structured file-audit specification to an operator DAG, a bounded resource schedule, worker execution, verification receipts and evidence-driven revision. It runs registered SHA-256 and manifest operations, and an optional `llm:grok` chat-completions receipt. Runtime uses only the Python standard library. The chat call uses a granted `XAI_API_KEY` when transport is `xai`. The fixture transport, the demo, and CI do not need a key and do not call api.x.ai.
 
 This preview has package tests and a reproducible fixture demonstration. Independent V&V and human intended-use validation are pending. Read [KNOWN_ISSUES.md](KNOWN_ISSUES.md) before relying on its validators. It is not a security sandbox or a safety-critical controller.
 

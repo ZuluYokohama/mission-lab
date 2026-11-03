@@ -6,6 +6,7 @@ import copy
 from pathlib import Path
 
 from . import core
+from .operators import required_buffer
 
 
 def compile_graph(mission):
@@ -34,18 +35,16 @@ def compile_graph(mission):
 def binding(node, candidate, inputs, costs):
     size = inputs[node["input_id"]]["size_bytes"] if "input_id" in node else 0
     if candidate == "whole_v1":
-        buffer = max(1, size)
         duration = costs["fixed_task_ns"] + size * costs["whole_ns_per_byte"]
     elif candidate == "stream_v1":
-        buffer = max(1, min(size, 32768))
         duration = costs["fixed_task_ns"] + size * costs["stream_ns_per_byte"]
     elif candidate == "reference_v1":
-        buffer = max(1, min(size, 8192))
         duration = costs["fixed_task_ns"] + size * costs["reference_ns_per_byte"]
-    elif candidate in ("compare_v1", "manifest_v1"):
-        buffer, duration = 0, costs["fixed_task_ns"]
+    elif candidate in ("compare_v1", "manifest_v1", "chat_v1"):
+        duration = costs["fixed_task_ns"]
     else:
         raise core.LabError("Unknown registered candidate")
+    buffer = required_buffer(node["operation"], candidate, inputs.get(node.get("input_id")), node=node, inputs=inputs)
     core.integer(duration, 1, 2**63 - 1, "estimated task duration_ns")
     return {"candidate": candidate, "revision": core.REVISIONS[candidate], "buffer_bytes": buffer, "duration_ns": duration}
 
@@ -93,18 +92,29 @@ def construct_schedule(graph, bindings, resources):
     return sorted(schedule, key=lambda row: (row["start_ns"], row["task_id"])), now
 
 
+def _clarification(mission):
+    return {"schema_version": 1, "status": "needs_clarification", "mission_id": mission["mission_id"],
+            "questions": mission["unresolved"], "machine_validation": True, "human_review": False}
+
+
 def build_plan(mission, resources, *, sources=None, check_files=True):
     mission = core.validate_mission(mission, check_files=check_files)
     resources = core.validate_resources(resources)
+    # Unresolved missions are not executable. Compile only when grants must be
+    # checked against a graph; validate_mission already checked explicit tasks.
+    if mission["unresolved"] and "worker_env" not in resources:
+        return _clarification(mission)
     graph = compile_graph(mission)
     core.check_worker_env_tasks(resources, [node["id"] for node in graph])
-    if mission["unresolved"]:
-        return {"schema_version": 1, "status": "needs_clarification", "mission_id": mission["mission_id"],
-                "questions": mission["unresolved"], "machine_validation": True, "human_review": False}
+    from .grok import check_llm_plan
     inputs = {item["id"]: item for item in mission["inputs"]}
+    check_llm_plan(resources, graph, inputs, read_files=check_files)
+    if mission["unresolved"]:
+        return _clarification(mission)
     choices = []
     options = {"sha256": ("whole_v1", "stream_v1"), "reference_sha256": ("reference_v1",),
-               "verify_digest": ("compare_v1",), "assemble_manifest": ("manifest_v1",)}
+               "verify_digest": ("compare_v1",), "assemble_manifest": ("manifest_v1",),
+               "llm:grok": ("chat_v1",)}
     for node in graph:
         candidates = [binding(node, candidate, inputs, resources["cost_model"]) for candidate in options[node["operation"]]]
         candidates = [candidate for candidate in candidates if candidate["buffer_bytes"] <= resources["read_buffer_bytes"]]
@@ -124,7 +134,9 @@ def build_plan(mission, resources, *, sources=None, check_files=True):
     obligations = [{"task_id": node["id"], "requirement_ids": [r["id"] for r in mission["requirements"]],
                     "checks": ["registered operation and revision", "declared resource reservations", "dependency and ownership"],
                     "requirement_semantics": "prose retained for human alignment; not automatically assessed",
-                    "functional_check": "exact hash and byte count against declared input and sequential reference"}
+                    "functional_check": ("recorded request and response hashes, HTTP status, reported token usage, and content artifact; no model-quality claim"
+                                         if node["operation"] == "llm:grok" else
+                                         "exact hash and byte count against declared input and sequential reference")}
                    for node in graph]
     plan = {"schema_version": 1, "mission": mission, "mission_identity": core.digest_object(mission),
             "graph": graph, "resources": resources, "bindings": best[1], "schedule": best[2],
