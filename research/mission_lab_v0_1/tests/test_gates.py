@@ -311,6 +311,26 @@ def test_replay_rejects_a_forged_gate_event_ledger(evidence_dir):
         report.replay_run(failed)
 
 
+def test_replay_rejects_a_second_terminal_event(evidence_dir):
+    plan = planner.build_plan(_mission(), _profile())
+    assert "model_budget" not in plan["resources"]
+
+    def append_terminal(rows, task_id, prior_kind, extra_kind):
+        index = next(i for i, row in enumerate(rows) if row.get("kind") == prior_kind and row.get("task_id") == task_id)
+        extra = {"sequence": 0, "kind": extra_kind, "task_id": task_id, "monotonic_ns": rows[index]["monotonic_ns"]}
+        return rows[:index + 1] + [extra] + rows[index + 1:]
+
+    gate_run = executor.run_plan_data(plan, evidence_dir / "second-gate")
+    _rewrite_events(gate_run, lambda rows: append_terminal(rows, "merit", "evaluated", "blocked"))
+    with pytest.raises(core.LabError, match="Repeated terminal event"):
+        report.replay_run(gate_run)
+
+    worker_run = executor.run_plan_data(plan, evidence_dir / "second-worker")
+    _rewrite_events(worker_run, lambda rows: append_terminal(rows, "hash:reply", "completed", "aborted"))
+    with pytest.raises(core.LabError, match="Repeated terminal event"):
+        report.replay_run(worker_run)
+
+
 def test_default_gate_evidence_text_is_truncated():
     reason = "x" * 200
     tasks = [{"task_id": f"g{index}", "output": {"outcome": "fail", "reason": reason}} for index in range(8)]

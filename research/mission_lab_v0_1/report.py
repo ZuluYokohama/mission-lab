@@ -370,6 +370,8 @@ def validate_observations(plan, semantic, observations, output):
             active[task_id] = needed
             launched.add(task_id)
         elif kind == "completed":
+            if task_id in done:
+                raise core.LabError("Repeated terminal event")
             if task_id not in active or event.get("status") != tasks[task_id]["status"]:
                 raise core.LabError("Illegal completion transition")
             active.pop(task_id)
@@ -384,6 +386,8 @@ def validate_observations(plan, semantic, observations, output):
             done[task_id] = "succeeded"
             evaluated.add(task_id)
         elif kind in {"blocked", "launch_failed", "aborted", "refused"}:
+            if task_id in done:
+                raise core.LabError("Repeated terminal event")
             if kind == "blocked" and ("gate_ids" in event or "blocked_by" in tasks[task_id]):
                 if event.get("gate_ids") != tasks[task_id].get("blocked_by"):
                     raise core.LabError("Blocked event does not name the gate")
