@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parent
 WORKSPACE = ROOT.parents[1]
 ARCHIVE = ROOT / "fixtures"
 SCHEMA = 1
-OPERATIONS = {"sha256", "reference_sha256", "verify_digest", "assemble_manifest", "llm:grok"}
-REVISIONS = {"whole_v1": "1", "stream_v1": "1", "reference_v1": "1", "compare_v1": "1", "manifest_v1": "1", "chat_v1": "1"}
+OPERATIONS = {"sha256", "reference_sha256", "verify_digest", "assemble_manifest", "llm:grok", "gate"}
+REVISIONS = {"whole_v1": "1", "stream_v1": "1", "reference_v1": "1", "compare_v1": "1", "manifest_v1": "1", "chat_v1": "1", "predicate_v1": "1"}
 OPERATOR_CONTRACTS = {
     "sha256": {"schema_version": 1, "input_type": "file_artifact_ref", "output_type": "digest_record",
                "candidates": {"whole_v1": "1", "stream_v1": "1"},
@@ -42,6 +42,14 @@ OPERATOR_CONTRACTS = {
                                     "response content is stored as a hash-addressed artifact",
                                     "the API key is not recorded"],
                  "effects": "one chat completion call or one local fixture read; own one staged receipt and response artifacts"},
+    "gate": {"schema_version": 1, "input_type": "dependency_receipts", "output_type": "gate_receipt",
+             "candidates": {"predicate_v1": "1"},
+             "preconditions": ["one or more direct dependencies",
+                               "a closed predicate over those receipts",
+                               "no read-buffer reservation and no model-budget reservation"],
+             "postconditions": ["receipt outcome is pass, fail, indeterminate, or pending",
+                                "fail, indeterminate, and pending do not launch downstream nodes"],
+             "effects": "controller evaluates the predicate in-process; no worker and no arbitrary code"},
 }
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$")
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
@@ -452,6 +460,10 @@ def validate_node_record(node):
                ("input_id", "prompt", "fixture_id", "max_input_tokens"), "node")
         from .grok import normalize_llm_fields
         normalize_llm_fields(node)
+    elif operation == "gate":
+        fields(node, base + ("predicate",), (), "node")
+        from .gates import normalize_predicate
+        node["predicate"] = normalize_predicate(node["predicate"])
     else:
         fields(node, base, ("input_id",), "node")
     return node
@@ -482,6 +494,9 @@ def validate_graph(graph, inputs):
         if node["operation"] == "assemble_manifest":
             if "input_id" in node:
                 raise LabError("Manifest has no direct input file")
+        elif node["operation"] == "gate":
+            if "input_id" in node:
+                raise LabError("Gate has no direct input file")
         elif node["operation"] != "llm:grok" and (not isinstance(node.get("input_id"), str) or node.get("input_id") not in known_inputs):
             raise LabError("Unknown graph input")
     remaining, ordered = set(nodes), []
@@ -513,6 +528,9 @@ def validate_graph(graph, inputs):
         if op == "llm:grok":
             from .grok import validate_llm_wiring
             validate_llm_wiring(node, nodes, inputs)
+        if op == "gate":
+            from .gates import validate_gate_wiring
+            validate_gate_wiring(node, nodes)
         expected_reads = sorted(nodes[d]["outputs"][0] for d in deps)
         if sorted(node["state_reads"]) != expected_reads:
             raise LabError("State interfaces mismatch dependency outputs")

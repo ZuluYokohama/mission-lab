@@ -41,6 +41,8 @@ def render_report(semantic, observations):
             detail = "passed"
         elif output.get("response_sha256"):
             detail = output["response_sha256"]
+        elif output.get("outcome") in ("pass", "fail", "indeterminate", "pending"):
+            detail = output["outcome"]
         else:
             detail = "—"
         if "size_bytes" in output:
@@ -57,6 +59,36 @@ def render_report(semantic, observations):
             else:
                 rendered_error = str(error)
             lines += ["", f"Retained error for `{task['task_id']}`: `{rendered_error.replace('`', '')}`", ""]
+    gate_rows = [task for task in semantic.get("tasks", [])
+                 if isinstance(task.get("output"), dict) and task["output"].get("outcome") in ("pass", "fail", "indeterminate", "pending")]
+    if gate_rows:
+        lines += ["", "## Merit gates", "",
+                  "A gate receipt is pass, fail, indeterminate, or pending. The task status stays succeeded when the controller finishes the evaluation. Fail, indeterminate, and pending do not launch downstream tasks and do not charge their model reservations.",
+                  "Pending means `approvals.json` has no matching record. That file records an approver id and a timestamp. It is not signed and not authenticated.",
+                  "", "| Gate | Outcome | Reason |", "|---|---|---|"]
+        for task in sorted(gate_rows, key=lambda item: item["task_id"]):
+            reason = str(task["output"].get("reason", "")).replace("|", "/").replace("`", "")
+            lines.append(f"| {task['task_id']} | {task['output']['outcome']} | {reason} |")
+    revision = semantic.get("revision") if isinstance(semantic, dict) else None
+    if isinstance(revision, dict):
+        trigger = revision.get("trigger") if isinstance(revision.get("trigger"), dict) else {}
+        refs = trigger.get("evidence_refs") if isinstance(trigger.get("evidence_refs"), list) else []
+        changed = revision.get("changed_tasks") if isinstance(revision.get("changed_tasks"), list) else []
+        affected = revision.get("affected_tasks") if isinstance(revision.get("affected_tasks"), list) else []
+        text = trigger.get("text") if isinstance(trigger.get("text"), str) else ""
+        lines += ["", "## Revision", "",
+                  f"Trigger: `{trigger.get('kind')}`. Origin: `{trigger.get('evidence_origin')}`.",
+                  text.replace("`", ""),
+                  "Evidence refs: " + (", ".join(str(item) for item in refs) if refs else "none") + ".",
+                  "Changed tasks: " + (", ".join(str(item) for item in changed) if changed else "none") + ".",
+                  "Affected tasks: " + (", ".join(str(item) for item in affected) if affected else "none") + ".",
+                  ""]
+    resume = semantic.get("resume_of") if isinstance(semantic, dict) else None
+    if isinstance(resume, dict):
+        lines += ["", "## Resume", "",
+                  f"This run started again from plan `{resume.get('plan_id')}` after an approval record was copied into the run directory.",
+                  f"Prior semantic sha256: `{resume.get('prior_semantic_sha256')}`. The approval record is not authenticated, and this line does not reopen the prior run.",
+                  ""]
     lines += ["", "## Observations", "",
               "| Task | Estimated duration (ns) | Observed duration (ns) | Reserved buffer bytes | Environment names |",
               "|---|---:|---:|---:|---|"]
@@ -103,7 +135,8 @@ def render_report(semantic, observations):
               "Different cache state, process startup, storage contention, and estimate error can explain timing differences.",
               "Matching digests supports the file-audit contract. It establishes no numerical-model, energy-saving, or general software-generation claim.",
               "An llm:grok receipt records the request, response hashes, provider-reported token counts, latency, and HTTP status. It does not score model quality or establish that the response is true.",
-              "Offline replay regenerates recorded outcomes and tables. It performs no new independent execution and does not call a model.", ""]
+              "A gate predicate compares declared receipt fields. Passing a gate is not a quality score, a signature, or a human review of the mission.",
+              "Offline replay regenerates recorded outcomes and re-evaluates gate predicates from archived receipts. It performs no new independent execution and does not call a model.", ""]
     return "\n".join(lines)
 
 
@@ -142,7 +175,8 @@ def replay_run(run):
     plan = core.load_plan(output / "plan.json")
     semantic = core.read_json(output / "semantic.json")
     observations = core.read_json(output / "observations.json")
-    core.fields(semantic, ("schema_version", "plan_id", "mission_id", "accepted", "profile", "tasks"), ("model_budget",), label="semantic record")
+    core.fields(semantic, ("schema_version", "plan_id", "mission_id", "accepted", "profile", "tasks"),
+                ("model_budget", "revision", "resume_of"), label="semantic record")
     if type(semantic["schema_version"]) is not int or semantic["schema_version"] != 1:
         raise core.LabError("Unsupported semantic schema")
     if semantic["profile"] != {"estimate_origin": plan["resources"]["estimate_origin"], "resources": plan["resources"],
@@ -154,7 +188,7 @@ def replay_run(run):
     if not isinstance(tasks, list):
         raise core.LabError("Malformed task evidence")
     for task in tasks:
-        core.fields(task, ("task_id", "status", "output", "error"), ("model_account",), label="archived task")
+        core.fields(task, ("task_id", "status", "output", "error"), ("model_account", "blocked_by"), label="archived task")
         core.identifier(task["task_id"])
         if not isinstance(task["status"], str):
             raise core.LabError("Malformed task status")
@@ -164,11 +198,22 @@ def replay_run(run):
         raise core.LabError("Missing or duplicate task evidence")
     validation = core.read_json(output / "validation.json")
     tasks_passed = all(task.get("status") == "succeeded" for task in tasks)
-    accepted = tasks_passed and validation.get("final_sources_and_inputs_match") is True and validation.get("executor_error") is None
-    if validation.get("passed") is not accepted or validation.get("all_registered_tasks_succeeded") is not tasks_passed:
-        raise core.LabError("Verification receipt contradicts task evidence")
-    if type(semantic.get("accepted")) is not bool or semantic["accepted"] != accepted:
-        raise core.LabError("Acceptance inconsistent with task evidence")
+    gate_nodes = {node["id"]: node for node in plan["graph"] if node.get("operation") == "gate"}
+    gates_passed = True
+    for task in tasks:
+        if task["task_id"] not in gate_nodes:
+            continue
+        receipt = task.get("output")
+        if task.get("status") != "succeeded" or not isinstance(receipt, dict) or receipt.get("outcome") != "pass":
+            gates_passed = False
+    accepted = tasks_passed and gates_passed and validation.get("final_sources_and_inputs_match") is True and validation.get("executor_error") is None
+    if ("revision" in semantic) != ("revision" in plan) or semantic.get("revision") != plan.get("revision"):
+        raise core.LabError("Revision record contradicts the plan")
+    if "resume_of" in semantic:
+        core.fields(semantic["resume_of"], ("plan_id", "prior_semantic_sha256"), label="resume record")
+        prior_hash = semantic["resume_of"]["prior_semantic_sha256"]
+        if semantic["resume_of"]["plan_id"] != plan["plan_id"] or not isinstance(prior_hash, str) or core.SHA256.fullmatch(prior_hash) is None:
+            raise core.LabError("Resume record does not match the plan")
     inputs = {item["id"]: item for item in plan["mission"]["inputs"]}
     for relative, expected in plan["sources"].items():
         snapshot = core.confined_path(output / "source_snapshot" / relative, [output / "source_snapshot"])
@@ -207,6 +252,13 @@ def replay_run(run):
                 raise core.LabError("Archived digest result violates the input contract")
             if node["operation"] == "verify_digest" and result.get("passed") is not True:
                 raise core.LabError("Missing functional verification receipt")
+    _check_blocked_by(plan, tasks)
+    from .gates import reevaluate_archived
+    reevaluate_archived(plan, tasks, observations, output)
+    if validation.get("passed") is not accepted or validation.get("all_registered_tasks_succeeded") is not tasks_passed:
+        raise core.LabError("Verification receipt contradicts task evidence")
+    if type(semantic.get("accepted")) is not bool or semantic["accepted"] != accepted:
+        raise core.LabError("Acceptance inconsistent with task evidence")
     manifests = [task for task in tasks if next(node for node in plan["graph"] if node["id"] == task["task_id"])["operation"] == "assemble_manifest"]
     expected_artifacts = sorted([{"input_id": item["id"], "sha256": item["sha256"], "size_bytes": item["size_bytes"]}
                                  for item in inputs.values()], key=lambda item: item["input_id"])
@@ -225,6 +277,35 @@ def replay_run(run):
             "accepted": accepted, "report": regenerated}
 
 
+def _check_blocked_by(plan, tasks):
+    nodes = {node["id"]: node for node in plan["graph"]}
+    by_task = {task["task_id"]: task for task in tasks}
+    for task in tasks:
+        if "blocked_by" not in task:
+            continue
+        node = nodes[task["task_id"]]
+        refs = task["blocked_by"]
+        if task["status"] != "blocked" or not isinstance(refs, list) or not refs or refs != sorted(refs) or len(set(refs)) != len(refs):
+            raise core.LabError("blocked_by does not name the blocking gates")
+        for ref in refs:
+            core.identifier(ref, "blocking gate")
+            if ref not in node["depends_on"] or nodes[ref]["operation"] != "gate":
+                raise core.LabError("blocked_by names a node that is not a gate dependency")
+            upstream = by_task[ref]
+            output = upstream.get("output") if upstream.get("status") == "succeeded" else None
+            if isinstance(output, dict) and output.get("outcome") == "pass":
+                raise core.LabError("Task blocked by a gate that passed")
+
+
+def _upstream_done(nodes, tasks, done, dep):
+    if done.get(dep) != "succeeded":
+        return False
+    if nodes[dep]["operation"] == "gate":
+        output = tasks[dep].get("output")
+        return isinstance(output, dict) and output.get("outcome") == "pass"
+    return True
+
+
 def validate_observations(plan, semantic, observations, output):
     if not isinstance(observations, list):
         raise core.LabError("Observations must be a list")
@@ -236,6 +317,8 @@ def validate_observations(plan, semantic, observations, output):
                           "process_creation_started_ns", "process_creation_ns", "environment_names"), ("model_account",), label="observation")
         if not isinstance(row["task_id"], str) or row["task_id"] not in nodes or row["task_id"] in observed:
             raise core.LabError("Invalid observation task identity")
+        if nodes[row["task_id"]]["operation"] == "gate":
+            raise core.LabError("Gate observation is not a worker process")
         observed.add(row["task_id"])
         for key in ("started_ns", "finished_ns", "duration_ns", "process_creation_started_ns", "process_creation_ns", "reserved_buffer_bytes"):
             if type(row[key]) is not int or row[key] < 0:
@@ -250,7 +333,8 @@ def validate_observations(plan, semantic, observations, output):
         if row["status"] == "succeeded" and row["exit_code"] != 0:
             raise core.LabError("Success contradicted by observed process status")
         core.validate_environment_receipt(row["environment_names"], plan["resources"], row["task_id"])
-    if semantic["accepted"] and observed != set(nodes):
+    worker_nodes = {nid for nid, node in nodes.items() if node["operation"] != "gate"}
+    if semantic["accepted"] and observed != worker_nodes:
         raise core.LabError("Accepted execution lacks task observations")
     try:
         events = [json.loads(line, object_pairs_hook=core._pairs) for line in (output / "events.jsonl").read_text(encoding="utf-8").splitlines()]
@@ -260,7 +344,7 @@ def validate_observations(plan, semantic, observations, output):
         raise core.LabError("Incomplete event ledger")
     active, done, launched, launched_environments = {}, {}, set(), {}
     last_time = -1
-    allowed = {"run_started", "run_completed", "launched", "completed", "blocked", "launch_failed", "executor_failed", "aborted", "final_identity_failed", "refused"}
+    allowed = {"run_started", "run_completed", "launched", "completed", "blocked", "launch_failed", "executor_failed", "aborted", "final_identity_failed", "refused", "evaluated"}
     for index, event in enumerate(events):
         if (not isinstance(event, dict) or type(event.get("sequence")) is not int or event.get("sequence") != index or
                 not isinstance(event.get("kind"), str) or event.get("kind") not in allowed):
@@ -270,10 +354,10 @@ def validate_observations(plan, semantic, observations, output):
             raise core.LabError("Invalid event time ordering")
         last_time = stamp
         kind, task_id = event["kind"], event.get("task_id")
-        if kind in {"launched", "completed", "blocked", "launch_failed", "aborted", "refused"} and (not isinstance(task_id, str) or task_id not in nodes):
+        if kind in {"launched", "completed", "blocked", "launch_failed", "aborted", "refused", "evaluated"} and (not isinstance(task_id, str) or task_id not in nodes):
             raise core.LabError("Unknown event task")
         if kind == "launched":
-            if task_id in launched or any(done.get(dep) != "succeeded" for dep in nodes[task_id]["depends_on"]):
+            if task_id in launched or any(not _upstream_done(nodes, tasks, done, dep) for dep in nodes[task_id]["depends_on"]):
                 raise core.LabError("Illegal launch transition/dependency")
             needed = plan["bindings"][task_id]["buffer_bytes"]
             if event.get("reserved_buffer_bytes") != needed:
@@ -287,7 +371,18 @@ def validate_observations(plan, semantic, observations, output):
                 raise core.LabError("Illegal completion transition")
             active.pop(task_id)
             done[task_id] = event["status"]
+        elif kind == "evaluated":
+            output_row = tasks[task_id].get("output")
+            if (nodes[task_id]["operation"] != "gate" or task_id in done or
+                    any(not _upstream_done(nodes, tasks, done, dep) for dep in nodes[task_id]["depends_on"]) or
+                    event.get("status") != "succeeded" or not isinstance(output_row, dict) or
+                    event.get("outcome") != output_row.get("outcome")):
+                raise core.LabError("Illegal gate evaluation")
+            done[task_id] = "succeeded"
         elif kind in {"blocked", "launch_failed", "aborted", "refused"}:
+            if kind == "blocked" and ("gate_ids" in event or "blocked_by" in tasks[task_id]):
+                if event.get("gate_ids") != tasks[task_id].get("blocked_by"):
+                    raise core.LabError("Blocked event does not name the gate")
             active.pop(task_id, None)
             done[task_id] = tasks[task_id]["status"]
         if kind in {"launched", "completed"}:
@@ -302,4 +397,7 @@ def validate_observations(plan, semantic, observations, output):
         raise core.LabError("Terminal event contradicts execution status")
     if semantic["accepted"] and set(done) != set(nodes):
         raise core.LabError("Accepted execution lacks completion events")
+    for task_id, node in nodes.items():
+        if node["operation"] == "gate" and tasks[task_id]["status"] == "succeeded" and done.get(task_id) != "succeeded":
+            raise core.LabError("Gate evaluation event is missing")
     verify_ledger(plan, semantic, observations, events)

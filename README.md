@@ -1,6 +1,6 @@
 # Mission Lab v0.1 — experimental public preview
 
-Mission Lab connects a structured file-audit specification to an operator DAG, a bounded resource schedule, worker execution, verification receipts and evidence-driven revision. It runs registered SHA-256 and manifest operations, and an optional `llm:grok` chat-completions receipt. Runtime uses only the Python standard library. The chat call uses a granted `XAI_API_KEY` when transport is `xai`. The fixture transport, the demo, and CI do not need a key and do not call api.x.ai.
+Mission Lab connects a structured file-audit specification to an operator DAG, a bounded resource schedule, worker execution, verification receipts and evidence-driven revision. It runs registered SHA-256 and manifest operations, an optional `llm:grok` chat-completions receipt, and a `gate` node that compares declared receipts before later work is launched. Passing a gate is not a quality score. Runtime uses only the Python standard library. The chat call uses a granted `XAI_API_KEY` when transport is `xai`. The fixture transport, the demo, `fixtures/mission_gate.json`, and CI do not need a key and do not call api.x.ai.
 
 This preview has package tests and a reproducible fixture demonstration. Independent V&V and human intended-use validation are pending. Read [KNOWN_ISSUES.md](KNOWN_ISSUES.md) before relying on its validators. It is not a security sandbox or a safety-critical controller.
 
@@ -24,7 +24,7 @@ python -B -m research.mission_lab_v0_1 inspect --root research/mission_lab_v0_1/
 
 Writing commands require a fresh directory under `research/mission_lab_v0_1/evidence/`. Reusing an output directory is refused. Generated evidence is local and ignored by Git: it can contain filesystem paths, PIDs, executable locations and timestamps. Inspect it before sharing.
 
-The other commands are `plan`, `run` and `replan`; use their `--help` for arguments. Missions accept 1–8 input files and a closed graph of at most 2048 nodes. The public derivative confines file inputs to the checkout and confines metadata inspection to package fixtures. Broader archive adapters require a separately reviewed change.
+The other commands are `plan`, `run`, `replan`, and `resume`; use their `--help` for arguments. `resume` starts a new run of a sealed plan after an approval file is supplied. That file is not a signature. Missions accept 1–8 input files and a closed graph of at most 2048 nodes. The public derivative confines file inputs to the checkout and confines metadata inspection to package fixtures. Broader archive adapters require a separately reviewed change.
 
 ## Demonstration and boundaries
 

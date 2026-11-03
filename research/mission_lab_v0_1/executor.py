@@ -13,8 +13,8 @@ import time
 import datetime as dt
 import platform
 
-from .core import (ARCHIVE, FORCED_WORKER_ENV, LabError, REVISIONS, ROOT, WORKSPACE, canonical, confined_path,
-                   digest_object, file_hash, load_plan, new_output, platform_env_names, read_json, verify_sources,
+from .core import (ARCHIVE, FORCED_WORKER_ENV, LabError, REVISIONS, ROOT, SHA256, WORKSPACE, canonical, confined_path,
+                   digest_object, fields, file_hash, load_plan, new_output, platform_env_names, read_json, verify_sources,
                    worker_environment, write_json)
 from . import grok
 from .budget import (account_record, add_cost, exceeds, ledger_for, reservation_for, reservation_numbers,
@@ -150,15 +150,77 @@ def _validate_result(value, job, exit_code):
     return value
 
 
+def _dependency_hold(node, results, nodes):
+    """Return whether dependencies have finished, and why a launch would be refused.
+
+    A finished gate counts only when its receipt outcome is pass. Other
+    finished dependencies count when their status is succeeded.
+    """
+    gate_ids = []
+    other_failed = False
+    ready = True
+    for dep in node["depends_on"]:
+        if dep not in results:
+            ready = False
+            continue
+        result = results[dep]
+        if nodes[dep]["operation"] == "gate":
+            output = result.get("output") if result.get("status") == "succeeded" else None
+            if not isinstance(output, dict) or output.get("outcome") != "pass":
+                gate_ids.append(dep)
+        elif result.get("status") != "succeeded":
+            other_failed = True
+    return ready, sorted(gate_ids), other_failed
+
+
+def _gates_passed(results, nodes):
+    for task_id, node in nodes.items():
+        if node["operation"] != "gate":
+            continue
+        result = results.get(task_id)
+        output = result.get("output") if isinstance(result, dict) else None
+        if not isinstance(result, dict) or result.get("status") != "succeeded" or not isinstance(output, dict) or output.get("outcome") != "pass":
+            return False
+    return True
+
+
+def _check_resume(plan, resume_of):
+    if resume_of is None:
+        return None
+    fields(resume_of, ("plan_id", "prior_semantic_sha256"), label="resume record")
+    prior = resume_of["prior_semantic_sha256"]
+    if resume_of["plan_id"] != plan["plan_id"] or not isinstance(prior, str) or SHA256.fullmatch(prior) is None:
+        raise LabError("Resume record does not match the plan")
+    return {"plan_id": resume_of["plan_id"], "prior_semantic_sha256": prior}
+
+
 def run_plan(plan_path, out):
     return run_plan_data(load_plan(plan_path), out)
 
 
-def run_plan_data(plan, out):
+def resume_run(prior_run, out, approval):
+    """Run the same plan again after copying one approval record into the new run.
+
+    The prior run stays sealed. Succeeded workers are not reused. The approval
+    file is not authenticated.
+    """
+    from .report import verify_integrity
+    prior = verify_integrity(prior_run)
+    plan = load_plan(prior / "plan.json")
+    record = read_json(approval) if not isinstance(approval, dict) else approval
+    if not isinstance(record, dict) or not isinstance(record.get("gate_id"), str):
+        raise LabError("Approval record must name a gate")
+    prior_semantic = read_json(prior / "semantic.json")
+    return run_plan_data(plan, out, approvals={record["gate_id"]: record}, resume_of={
+        "plan_id": plan["plan_id"], "prior_semantic_sha256": digest_object(prior_semantic)})
+
+
+def run_plan_data(plan, out, *, approvals=None, resume_of=None):
     nodes = _check_plan(plan)
     _check_inputs(plan)
+    resume_of = _check_resume(plan, resume_of)
     directory = new_output(out)
-    resource_contract = "registered worker slots and explicit input buffers; an llm:grok task reserves only declared prompt or fixture bytes and caps the response separately; controller integrity checks, process overhead, RSS, cores and energy are outside this reservation"
+    resource_contract = "registered worker slots and explicit input buffers; an llm:grok task reserves only declared prompt or fixture bytes and caps the response separately; a gate reserves neither a read buffer nor a model budget and is evaluated by the controller; controller integrity checks, process overhead, RSS, cores and energy are outside this reservation"
     if "model_budget" in plan["resources"]:
         resource_contract += " A declared model budget reserves worst-case requests, token bounds, and profile-priced spend before launch, then settles provider-reported usage. That ledger is not an invoice or an energy measurement."
     write_json(directory / "environment.json", {
@@ -183,6 +245,8 @@ def run_plan_data(plan, out):
         write_json(directory / (name + ".json"), value)
     _snapshot_sources(plan, directory)
     _snapshot_inputs(plan, directory)
+    from .gates import evaluate, evidence_from, install_approvals
+    install_approvals(directory, nodes, approvals)
     from .planner import architecture
     (directory / "architecture.mmd").write_text(architecture(plan["graph"]), encoding="utf-8", newline="\n")
     pending = set(nodes)
@@ -242,17 +306,41 @@ def run_plan_data(plan, out):
             progress = False
             for task_id in sorted(pending, key=lambda name: (-tails[name], name)):
                 node = nodes[task_id]
-                if any(dep in results and results[dep]["status"] != "succeeded" for dep in node["depends_on"]):
-                    results[task_id] = with_account(task_id, _failure(task_id, LabError("A dependency did not succeed"), "blocked"), "unlaunched")
+                ready, gate_ids, other_failed = _dependency_hold(node, results, nodes)
+                if gate_ids or other_failed:
+                    if gate_ids:
+                        failure = _failure(task_id, LabError("Blocked by gate " + ", ".join(gate_ids)), "blocked")
+                        failure["blocked_by"] = gate_ids
+                    else:
+                        failure = _failure(task_id, LabError("A dependency did not succeed"), "blocked")
+                    results[task_id] = with_account(task_id, failure, "unlaunched")
                     write_json(directory / ("result_" + str(order.get(task_id, len(order))) + ".json"), results[task_id])
                     pending.remove(task_id)
                     blocked_fields = {}
+                    if gate_ids:
+                        blocked_fields["gate_ids"] = gate_ids
                     if limits is not None:
-                        blocked_fields = {"model_state": "unlaunched", "model_accounted": current_accounted()}
+                        blocked_fields["model_state"] = "unlaunched"
+                        blocked_fields["model_accounted"] = current_accounted()
                     event("blocked", task_id, **blocked_fields)
                     progress = True
                     continue
-                if not all(dep in results for dep in node["depends_on"]):
+                if not ready:
+                    continue
+                if node["operation"] == "gate":
+                    receipt = evaluate(node, evidence_from(results, observations, directory))
+                    result = {"task_id": task_id, "status": "succeeded", "output": receipt, "error": None}
+                    results[task_id] = with_account(task_id, result, "unlaunched")
+                    index = order.get(task_id, len(order))
+                    write_json(staged / (str(index) + ".json"), receipt)
+                    write_json(directory / ("result_" + str(index) + ".json"), results[task_id])
+                    pending.remove(task_id)
+                    evaluated_fields = {"status": "succeeded", "outcome": receipt["outcome"]}
+                    if limits is not None:
+                        evaluated_fields["model_state"] = "unlaunched"
+                        evaluated_fields["model_accounted"] = current_accounted()
+                    event("evaluated", task_id, **evaluated_fields)
+                    progress = True
                     continue
                 binding = plan["bindings"][task_id]
                 if len(running) >= plan["resources"]["workers"] or used_buffer + binding["buffer_bytes"] > plan["resources"]["read_buffer_bytes"]:
@@ -438,13 +526,14 @@ def run_plan_data(plan, out):
                 active["child"].kill()
             active["child"].wait()
     tasks_passed = len(results) == len(nodes) and all(value["status"] == "succeeded" for value in results.values())
+    gates_passed = _gates_passed(results, nodes)
     identity_error = None
     try:
         _check_inputs(plan)
     except Exception as error:
         identity_error = {"type": type(error).__name__, "message": str(error)}
         event("final_identity_failed", error=identity_error)
-    accepted = tasks_passed and identity_error is None and executor_error is None
+    accepted = tasks_passed and gates_passed and identity_error is None and executor_error is None
     task_rows = [results[key] for key in sorted(results)]
     ledger = ledger_for(limits, task_rows) if limits is not None else None
     telemetry = {"peak_workers_observed": max((row.get("workers_active", 0) for row in events), default=0),
@@ -467,6 +556,10 @@ def run_plan_data(plan, out):
                 "tasks": task_rows}
     if ledger is not None:
         semantic["model_budget"] = ledger
+    if "revision" in plan:
+        semantic["revision"] = plan["revision"]
+    if resume_of is not None:
+        semantic["resume_of"] = resume_of
     write_json(directory / "semantic.json", semantic)
     write_json(directory / "observations.json", observations)
     write_json(directory / "validation.json", validation)
