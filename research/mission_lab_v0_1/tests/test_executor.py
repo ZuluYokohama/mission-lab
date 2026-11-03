@@ -262,7 +262,10 @@ class ExecutorTests(unittest.TestCase):
             task_id = job["node"]["id"]
             self.assertIsInstance(env, dict)
             self.assertNotIn(sentinel_name, env)
+            self.assertFalse(any(name.casefold() == sentinel_name.casefold() for name in env))
             self.assertNotIn(sentinel_value, tuple(env.values()))
+            if os.name == "nt":
+                self.assertTrue(all(name == name.upper() for name in env))
             self.assertNotIn("PYTHONSTARTUP", env)
             self.assertNotIn("MISSION_LAB_UNUSED_TOKEN", env)
             self.assertEqual(env.get("PYTHONUNBUFFERED"), "1")
@@ -279,8 +282,10 @@ class ExecutorTests(unittest.TestCase):
                 [sys.executable, "-B", "-c", "import json,os,sys; sys.stdout.write(json.dumps(sorted(os.environ)))"],
                 env=env, capture_output=True, text=True, check=False)
             self.assertEqual(probe.returncode, 0, probe.stderr)
-            self.assertEqual(json.loads(probe.stdout), sorted(env))
-            self.assertNotIn(sentinel_name, json.loads(probe.stdout))
+            child_names = json.loads(probe.stdout)
+            self.assertEqual(child_names, sorted(env))
+            self.assertNotIn(sentinel_name, child_names)
+            self.assertFalse(any(name.casefold() == sentinel_name.casefold() for name in child_names))
             self.assertNotIn(sentinel_value, probe.stdout)
         self.assertIsNotNone(granted_env)
         granted_probe = subprocess.run(

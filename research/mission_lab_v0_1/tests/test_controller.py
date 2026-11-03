@@ -286,7 +286,9 @@ def test_default_resources_grant_no_worker_environment():
 @pytest.mark.parametrize("declared,grants,message", [
     (["BETA_TOKEN"], {"hash:sample": ["OTHER_TOKEN"]}, "Undeclared worker environment variable: OTHER_TOKEN"),
     (["PATH"], {}, "platform-controlled"),
+    (["Path"], {}, "platform-controlled"),
     (["SystemRoot"], {}, "platform-controlled"),
+    (["systemroot"], {}, "platform-controlled"),
     (["pythonunbuffered"], {}, "platform-controlled"),
     (["ALPHA_TOKEN", "alpha_token"], {}, "Duplicate"),
     (["ALPHA_TOKEN", "ALPHA_TOKEN"], {}, "Duplicate"),
@@ -350,6 +352,7 @@ def test_worker_env_normalizes_names_and_passes_only_grants(planning):
     assert child["names"] == sorted(granted)
     assert child["alpha"] == secret
     assert "MISSION_LAB_SENTINEL_SECRET" not in child["names"]
+    assert not any(name.casefold() == "mission_lab_sentinel_secret" for name in child["names"])
     assert sentinel not in probe.stdout
     with pytest.raises(core.LabError, match="not set: ALPHA_TOKEN"):
         core.worker_environment(plan["resources"], "hash:sample", {"PATH": "/usr/bin"})
@@ -375,6 +378,41 @@ def test_environment_receipt_rejects_an_ungranted_name(planning):
         core.validate_environment_receipt(sorted(names + ["MISSION_LAB_SENTINEL_SECRET"]), plan["resources"], "hash:sample")
     with pytest.raises(core.LabError, match="omits a granted variable: ALPHA_TOKEN"):
         core.validate_environment_receipt(["PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED"], plan["resources"], "hash:sample")
+    folded = ["PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED", "alpha_token"]
+    assert core.validate_environment_receipt(folded, plan["resources"], "hash:sample") == folded
+    windows_receipt = ["ALPHA_TOKEN", "PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED", "SYSTEMROOT"]
+    assert core.validate_environment_receipt(windows_receipt, plan["resources"], "hash:sample") == windows_receipt
+    with pytest.raises(core.LabError, match="another case"):
+        core.validate_environment_receipt(
+            ["PATH", "PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED", "Path"], plan["resources"], "manifest")
+
+
+def test_windows_environment_folds_case_for_grants_and_denies(planning):
+    planner, mission, profile = planning
+    secret = "granted-token-value"
+    sentinel = "sentinel-secret-value"
+    profile["worker_env"] = {"declared": ["ALPHA_TOKEN"], "grants": {"hash:sample": ["ALPHA_TOKEN"]}}
+    plan = planner.build_plan(mission, profile)
+    parent = {
+        "SystemRoot": "C:\\Windows", "Path": "C:\\Windows", "path": "C:\\Windows",
+        "alpha_token": secret, "mission_lab_sentinel_secret": sentinel,
+    }
+    granted = core._worker_environment(plan["resources"], "hash:sample", parent, windows=True)
+    withheld = core._worker_environment(plan["resources"], "manifest", parent, windows=True)
+    assert granted["SYSTEMROOT"] == "C:\\Windows"
+    assert granted["PATH"] == "C:\\Windows"
+    assert granted["ALPHA_TOKEN"] == secret
+    assert set(granted) == {name.upper() for name in granted}
+    assert "alpha_token" not in granted
+    assert "ALPHA_TOKEN" not in withheld
+    assert "alpha_token" not in withheld
+    assert not any(name.casefold() == "mission_lab_sentinel_secret" for name in granted)
+    assert sentinel not in granted.values()
+    conflicted = {"PATH": "one", "Path": "two"}
+    with pytest.raises(core.LabError, match="conflicting values") as caught:
+        core._worker_environment(plan["resources"], "manifest", conflicted, windows=True)
+    assert "one" not in str(caught.value)
+    assert "two" not in str(caught.value)
 
 
 def test_fresh_output_can_be_created_only_below_evidence_root(tmp_path):
