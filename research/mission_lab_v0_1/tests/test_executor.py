@@ -14,7 +14,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from research.mission_lab_v0_1 import core, executor, operators, planner, worker
+from research.mission_lab_v0_1 import core, executor, operators, planner, seal, worker
 
 
 class ExecutorTests(unittest.TestCase):
@@ -93,6 +93,8 @@ class ExecutorTests(unittest.TestCase):
                   for path in directory.rglob("*") if path.is_file() and path.name != "integrity.json"}
         self.assertEqual(integrity["files"], actual)
         self.assertEqual(integrity["semantic_sha256"], core.file_hash(directory / "semantic.json"))
+        self.assertEqual(integrity["signature"]["algorithm"], "hmac-sha256")
+        self.assertEqual(integrity["signature"]["key_id"], seal.key_id(seal.require_seal_key()))
         for name, digest in core.read_json(directory / "sources.json").items():
             self.assertEqual(core.file_hash(directory / "source_snapshot" / name), digest)
 
@@ -314,12 +316,7 @@ class ExecutorTests(unittest.TestCase):
         extra = present[0]
 
         def reseal():
-            manifest = core.read_json(output / "integrity.json")
-            manifest["files"] = {path.relative_to(output).as_posix(): core.file_hash(path)
-                                 for path in output.rglob("*") if path.is_file() and path.name != "integrity.json"}
-            if "semantic_sha256" in manifest:
-                manifest["semantic_sha256"] = core.file_hash(output / "semantic.json")
-            (output / "integrity.json").write_text(core.canonical(manifest), encoding="utf-8", newline="\n")
+            seal.reseal(output)
 
         def restore():
             (output / "observations.json").write_text(original_observations, encoding="utf-8", newline="\n")
@@ -359,12 +356,7 @@ class ExecutorTests(unittest.TestCase):
             encoding="utf-8", newline="\n")
         semantic = core.read_json(output / "semantic.json")
         (output / "report.md").write_text(report.render_report(semantic, rows), encoding="utf-8", newline="\n")
-        manifest = core.read_json(output / "integrity.json")
-        manifest["files"] = {path.relative_to(output).as_posix(): core.file_hash(path)
-                             for path in output.rglob("*") if path.is_file() and path.name != "integrity.json"}
-        if "semantic_sha256" in manifest:
-            manifest["semantic_sha256"] = core.file_hash(output / "semantic.json")
-        (output / "integrity.json").write_text(core.canonical(manifest), encoding="utf-8", newline="\n")
+        seal.reseal(output)
         with self.assertRaises(core.LabError) as caught:
             report.replay_run(output)
         self.assertIn("omits a granted variable", str(caught.exception))

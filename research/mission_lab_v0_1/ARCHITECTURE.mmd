@@ -14,7 +14,12 @@ flowchart TD
     Z --> R[Replan; gate evidence can tighten a bound or swap a candidate]
     E --> R
     R --> D
-    M --> Q[Offline replay re-evaluates each gate from archived receipts]
+    M --> S[Controller HMAC-SHA256 over the integrity manifest]
+    S --> Q[Offline replay re-evaluates each gate from archived receipts]
+    Q -->|HMAC matches| Y[Signature status verified]
+    Q -->|no signature and legacy flag| L[unsigned legacy; integrity_verified stays false]
+    W -->|declared approver key ids| H[Approval HMAC; missing or invalid stays pending]
+    CK[Controller signing key] -. withheld; not a worker grant .-> X
     U[Package fixtures] --> I[Metadata-only bounded inventory]
     I --> O
     X -. worker, read-buffer, and model-budget reservations .-> B[Controller checks]

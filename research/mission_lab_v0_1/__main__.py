@@ -22,14 +22,17 @@ def main(argv=None):
         if name == "replan":
             command.add_argument("--resources", required=True)
             command.add_argument("--trigger", required=True)
+            command.add_argument("--allow-unsigned-legacy", action="store_true")
         if name == "inspect":
             command.add_argument("--root", required=True)
     replay = commands.add_parser("replay")
     replay.add_argument("--run", required=True)
+    replay.add_argument("--allow-unsigned-legacy", action="store_true")
     resume = commands.add_parser("resume")
     resume.add_argument("--run", required=True)
     resume.add_argument("--out", required=True)
     resume.add_argument("--approval", required=True)
+    resume.add_argument("--allow-unsigned-legacy", action="store_true")
     args = parser.parse_args(argv)
     try:
         if args.command == "validate":
@@ -47,13 +50,14 @@ def main(argv=None):
             result = {"output": str(output), "accepted": semantic["accepted"]}
         elif args.command == "replan":
             from .replan import replan_to_output
-            result = {"output": str(replan_to_output(args.plan, args.resources, args.trigger, args.out))}
+            result = {"output": str(replan_to_output(args.plan, args.resources, args.trigger, args.out,
+                                                     allow_legacy_unsigned=args.allow_unsigned_legacy))}
         elif args.command == "replay":
             from .report import replay_run
-            result = replay_run(args.run)
+            result = replay_run(args.run, allow_legacy_unsigned=args.allow_unsigned_legacy)
         elif args.command == "resume":
             from .executor import resume_run
-            output = resume_run(args.run, args.out, args.approval)
+            output = resume_run(args.run, args.out, args.approval, allow_legacy_unsigned=args.allow_unsigned_legacy)
             semantic = core.read_json(output / "semantic.json")
             result = {"output": str(output), "accepted": semantic["accepted"]}
         elif args.command == "inspect":

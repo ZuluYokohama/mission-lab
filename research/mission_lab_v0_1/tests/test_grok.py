@@ -196,10 +196,8 @@ def test_fixture_run_replays_without_network_and_does_not_keep_the_key(evidence_
     flipped = bytearray(payload)
     flipped[0] ^= 0x01
     response_path.write_bytes(bytes(flipped))
-    manifest = core.read_json(output / "integrity.json")
-    manifest["files"] = {path.relative_to(output).as_posix(): core.file_hash(path)
-                         for path in output.rglob("*") if path.is_file() and path.name != "integrity.json"}
-    (output / "integrity.json").write_text(core.canonical(manifest), encoding="utf-8", newline="\n")
+    from research.mission_lab_v0_1.seal import reseal
+    reseal(output)
     with pytest.raises(core.LabError, match="response hash"):
         report.replay_run(output)
 

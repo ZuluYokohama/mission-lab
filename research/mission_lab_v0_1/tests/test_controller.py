@@ -827,13 +827,9 @@ def test_changed_input_or_source_is_rejected_before_output_creation(executable):
 
 
 def reseal_evidence_for_adversarial_fixture(run):
-    """Resealing tests semantic validation; hashes alone are not authenticity."""
-    manifest = core.read_json(run / "integrity.json")
-    manifest["files"] = {path.relative_to(run).as_posix(): core.file_hash(path)
-                         for path in run.rglob("*") if path.is_file() and path.name != "integrity.json"}
-    if "semantic_sha256" in manifest:
-        manifest["semantic_sha256"] = core.file_hash(run / "semantic.json")
-    (run / "integrity.json").write_text(core.canonical(manifest), encoding="utf-8")
+    """Reseal with the controller key so the assertion is the semantic check."""
+    from research.mission_lab_v0_1.seal import reseal
+    reseal(run)
 
 
 @pytest.mark.parametrize("tamper", ["promoted_manifest", "semantic_manifest", "missing_observations", "negative_duration", "human_review", "input_receipt", "resource_event"])

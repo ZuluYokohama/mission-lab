@@ -5,8 +5,9 @@ receipts of its dependencies and writes a receipt. There is no worker
 process, no read-buffer reservation, and no model-budget reservation.
 
 Predicates are a closed set. Nothing in a predicate is executed as code.
-`human_approval` reads one JSON record from the run directory. That record
-is not signed and not authenticated.
+`human_approval` reads one JSON record from the run directory. Without
+`approver_key_ids` that record is not signed. With them, a missing or
+invalid HMAC stays pending and does not pass. The HMAC is not a public signature.
 """
 from __future__ import annotations
 
@@ -72,7 +73,7 @@ def declared_approver(predicate):
 
 
 def approval_document(records):
-    """Canonical approvals file. Records are not authenticated."""
+    """Canonical approvals file. A signature field is checked later, at the gate."""
     if not isinstance(records, list) or not 1 <= len(records) <= MAX_APPROVALS:
         raise LabError("Approvals require 1..32 records")
     normalized = []
@@ -88,21 +89,25 @@ def approval_document(records):
 
 
 def validate_approval_record(record, gate_id=None):
-    fields(record, ("schema_version", "gate_id", "approver_id", "approved_at"), label="approval record")
+    fields(record, ("schema_version", "gate_id", "approver_id", "approved_at"), ("signature",), label="approval record")
     if type(record["schema_version"]) is not int or record["schema_version"] != 1:
         raise LabError("Unsupported approval schema")
     gid = identifier(record["gate_id"], "approval gate id")
     if gate_id is not None and gid != gate_id:
         raise LabError("Approval record names a different gate")
     approver = identifier(record["approver_id"], "approver id")
-    return {"schema_version": 1, "gate_id": gid, "approver_id": approver, "approved_at": _timestamp(record["approved_at"])}
+    normalized = {"schema_version": 1, "gate_id": gid, "approver_id": approver, "approved_at": _timestamp(record["approved_at"])}
+    if "signature" in record:
+        from .seal import parse_signature_object
+        normalized["signature"] = parse_signature_object(record["signature"], "approval signature")
+    return normalized
 
 
 def install_approvals(directory, nodes, approvals):
     """Copy supplied records into approvals.json. Unknown gates are rejected.
 
     A record whose approver id does not match the predicate is still stored.
-    The gate then records fail. This does not authenticate the approver.
+    The gate then records fail. A signature is stored and checked at evaluation.
     """
     if approvals is None:
         return
@@ -126,7 +131,7 @@ def read_approvals(directory):
     """Return ('absent'|'ok'|'malformed', records by gate id).
 
     A missing file is absent. A file that does not match the approval schema
-    is malformed for every gate. This does not authenticate the approver.
+    is malformed for every gate. HMAC checks happen in evaluation, not here.
     """
     path = Path(directory) / "approvals.json"
     if not path.exists():
@@ -293,8 +298,11 @@ def _normalize(value, depth, count):
             raise LabError(kind + " requires 1..16 child predicates")
         return {"kind": kind, "predicates": [_normalize(child, depth + 1, count) for child in children]}
     if kind == "human_approval":
-        fields(value, ("kind", "approver_id"), label="human_approval predicate")
-        return {"kind": "human_approval", "approver_id": identifier(value["approver_id"], "approver id")}
+        fields(value, ("kind", "approver_id"), ("approver_key_ids",), label="human_approval predicate")
+        record = {"kind": "human_approval", "approver_id": identifier(value["approver_id"], "approver id")}
+        if "approver_key_ids" in value:
+            record["approver_key_ids"] = _approver_key_ids(value["approver_key_ids"])
+        return record
     raise LabError("Unknown gate predicate")
 
 
@@ -464,15 +472,53 @@ def _compose(children, evidence, gate_id, *, empty_pass):
     return "fail", "no child predicate passed"
 
 
+def _approver_key_ids(value):
+    if not isinstance(value, list) or not 1 <= len(value) <= 8:
+        raise LabError("human_approval approver_key_ids must list 1..8 key ids")
+    found = []
+    for item in value:
+        if not isinstance(item, str) or SHA256.fullmatch(item) is None:
+            raise LabError("approver key id must be a lowercase SHA-256 fingerprint")
+        if item in found:
+            raise LabError("Duplicate approver key id")
+        found.append(item)
+    return sorted(found)
+
+
 def _approval(predicate, evidence, gate_id):
     if evidence.get("approval_status") == "malformed":
         return "indeterminate", "approval record is malformed; the record is not authenticated"
     record = evidence.get("approvals", {}).get(gate_id)
+    required = predicate.get("approver_key_ids")
+    if not required:
+        if not isinstance(record, dict):
+            return "pending", "approval record is absent; the record is not authenticated"
+        if record.get("gate_id") != gate_id or record.get("approver_id") != predicate["approver_id"]:
+            return "fail", "approval record does not match the declared approver; the record is not authenticated"
+        return "pass", "approval record matches the declared approver; the record is not authenticated"
     if not isinstance(record, dict):
-        return "pending", "approval record is absent; the record is not authenticated"
+        return "pending", "approval record is absent"
     if record.get("gate_id") != gate_id or record.get("approver_id") != predicate["approver_id"]:
-        return "fail", "approval record does not match the declared approver; the record is not authenticated"
-    return "pass", "approval record matches the declared approver; the record is not authenticated"
+        return "fail", "approval record does not match the declared approver"
+    return _signed_approval(record, required)
+
+
+def _signed_approval(record, required):
+    signature = record.get("signature")
+    if not isinstance(signature, dict):
+        return "pending", "approval signature is absent"
+    if signature.get("algorithm") != "hmac-sha256":
+        return "pending", "approval signature algorithm is not hmac-sha256"
+    signed_id = signature.get("key_id")
+    if not isinstance(signed_id, str) or signed_id not in required:
+        return "pending", "approval signature key is not a declared approver key"
+    from .seal import approval_mac_matches, load_approver_keys
+    key = load_approver_keys().get(signed_id)
+    if key is None:
+        return "pending", "approver key is not available"
+    if not approval_mac_matches(record, key):
+        return "pending", "approval signature is not valid"
+    return "pass", "approval signature matches approver key " + signed_id
 
 
 def _reason(text):

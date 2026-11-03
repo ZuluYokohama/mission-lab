@@ -59,7 +59,13 @@ A run is accepted only when every task status is `succeeded` and every gate outc
 
 Replay recomputes every gate with the same function from archived outputs, settled accounts, recorded exit codes, and `approvals.json`. The archived receipt must equal that result, including `predicate_sha256`. A changed predicate or a changed outcome is rejected. Replay does not call the network, does not start a worker, and is not a second implementation.
 
-`human_approval` reads `approvals.json` in the run directory. One file is used so a gate id may contain `:`, which is not a legal Windows file name. A record has `schema_version` 1, `gate_id`, `approver_id`, and `approved_at` as `YYYY-MM-DDTHH:MM:SSZ`. The calendar date is checked. The timestamp is not compared with the clock and is not a signature. No record is pending, and pending blocks downstream. A malformed file makes every such gate indeterminate. A record that names a different gate or approver is fail. A matching record is pass, and the reason states that the record is not authenticated. Signed receipts are not implemented. `resume --run --out --approval` checks the sealed prior run, copies one record into a new run directory, and executes the same plan again. It does not reuse worker processes and does not rewrite the prior run. `resume_of` stores that plan id and the prior semantic sha256. `human_review` on the plan stays false.
+`human_approval` reads `approvals.json` in the run directory. One file is used so a gate id may contain `:`, which is not a legal Windows file name. A record has `schema_version` 1, `gate_id`, `approver_id`, and `approved_at` as `YYYY-MM-DDTHH:MM:SSZ`. An optional `signature` uses the same object as the run seal. The calendar date is checked. The timestamp is not compared with the clock.
+
+Without `approver_key_ids`, no record is pending, a malformed file makes the gate indeterminate, a record that names a different gate or approver is fail, and a matching record is pass. The reason states that the record is not authenticated.
+
+`approver_key_ids`, when present, lists 1 to 8 distinct lowercase SHA-256 fingerprints. The stored list is sorted. A missing record is pending. A different gate or approver is fail. A missing signature, an algorithm other than `hmac-sha256`, a key id that is not in the list, a key that is not loaded, or an HMAC that does not match stays pending and does not pass. A matching HMAC is pass, and the reason names that key id. Approver keys come from `MISSION_LAB_APPROVER_KEY` or `MISSION_LAB_APPROVER_KEY_FILE`, and from regular files directly in `MISSION_LAB_APPROVER_KEY_DIR`. No approver key configured is an empty map. A missing approver key at evaluation is pending. A short key, a missing file, or both single-key sources set together raises before evaluation. The HMAC shows the integrity of that record to a holder of the approver key. It is not a public signature and it does not set `human_review`.
+
+`resume --run --out --approval` checks the prior seal, copies one record into a new run directory, and executes the same plan again. It does not reuse worker processes and does not rewrite the prior run. `resume_of` stores the plan id, the prior semantic sha256, the prior seal sha256, and, when the parent seal was verified, the prior seal key id. `human_review` on the plan stays false.
 
 A revision trigger of kind `gate_evidence` requires `evidence_refs` that name gates on the prior plan. `gate_evidence_trigger` fills those refs from receipts whose outcome is fail, indeterminate, or pending. The replacement mission may tighten a predicate, and the resource profile may change so a `sha256` candidate swaps. The report lists the trigger, the evidence refs, and the changed tasks. The trigger does not by itself rewrite the predicate. `fixtures/mission_gate.json` is a fixture-transport mission that runs one gate. It does not use the network or an API key, and passing that gate is not a quality score.
 
@@ -117,13 +123,45 @@ Optional `worker_env` contains `declared` and `grants` only. `declared` is a lis
 
 Plans and resource profiles record grant names, not values. Plan normalization does not depend on the host operating system. Each launch event and task observation records sorted `environment_names` and no values. Replay rejects a receipt that names a variable outside the two platform lists, the forced flags, and that task's grants, or that omits a granted name or a forced flag. It also rejects an observation whose names differ from the launch event, and a receipt that repeats one name under another case. Name comparison folds case, so a Windows record can be replayed on POSIX. That check does not prove which platform names were set or the exact spelling a child reported, and it does not observe the child process.
 
+These names cannot be granted, including under another case: `MISSION_LAB_SEAL_KEY`, `MISSION_LAB_SEAL_KEY_FILE`, `MISSION_LAB_APPROVER_KEY`, `MISSION_LAB_APPROVER_KEY_FILE`, and `MISSION_LAB_APPROVER_KEY_DIR`. The error is `Controller key variable cannot be granted`. The worker also drops those names from its own environment mapping if they are present. That drop does not erase a value the operating system still holds in the initial process image. The control is that the controller does not pass them. Refusing the name is not a file-mode check.
+
 This is process-environment filtering for the registered worker command. It is not a system-call sandbox, a credential store, or a statement that a worker which received a grant cannot disclose that value. TLS trust stores, proxy names, service endpoints, and `XAI_API_KEY` are outside the start allowlist. `llm:grok` with transport `xai` must be granted `XAI_API_KEY`. A granted proxy can see that token.
+
+## Run seal
+
+`integrity.json` is schema 1. It maps every file in the run directory except itself to a SHA-256. It may include `semantic_sha256` of `semantic.json` and `hash_note`. A new run also includes `signature`.
+
+The signature object is closed: `schema_version` 1, `algorithm`, `key_id`, and `value`. `key_id` is 64 lowercase hex characters. `value` is lowercase hex of even length from 2 to 512 characters. This version verifies only `algorithm` `hmac-sha256`, and that value is 64 hex characters. Any other algorithm, including a later `ed25519`, is rejected with `Unsupported seal signature algorithm`. The object is the place a later version can put another scheme. An hmac-sha256 seal from this version stays readable.
+
+The HMAC is SHA-256 over the UTF-8 canonical JSON of the manifest with `signature` removed. Canonical JSON has sorted keys, indent 2, and a trailing newline. The lineage hash is a different value: SHA-256 of the stored `integrity.json` bytes, signature included.
+
+`key_id` is HMAC-SHA256 of the label `mission-lab.key-id.v1` under the same key. The key is not stored and is not recoverable from the id. The same key yields the same id.
+
+The controller reads the key from `MISSION_LAB_SEAL_KEY` or `MISSION_LAB_SEAL_KEY_FILE`, and not from both. The environment value is its UTF-8 bytes. The file is raw bytes, with no newline stripped. The length is 16 to 4096 bytes. A symlink is refused. Permission bits are not inspected. A new run with neither source set fails before the output directory is created, with `Seal key is not configured`. Both sources set is `Seal key source is ambiguous`.
+
+`semantic.json` stores `seal`: schema 1, `algorithm` `hmac-sha256`, and `key_id`. The MAC stays on the manifest. The report line says `signed` and prints the key id. That line is written when the seal is produced. Replay reports `verified` only after the HMAC matches. `integrity_verified` is true only in that case.
+
+Replay checks file bytes before the signature. These failures stay distinct:
+
+- a changed archived file: `Archived evidence changed`
+- an HMAC mismatch for the recorded key id: `Seal signature is not valid`
+- no signature while `semantic.json` still has a seal claim: `Resealed run has no valid signature`
+- a loaded key whose id differs from the seal: `Seal key does not match the recorded key id`
+- a signed seal and no key configured: `Seal key is not available`
+- no signature and no seal claim, without the legacy flag: `Unsigned seal`
+- a seal claim whose key id differs from a valid signature: `Seal claim does not match the signature`
+
+`--allow-unsigned-legacy` on `replay`, `resume`, and `replan` accepts a manifest with no signature and no seal claim. The status is `unsigned (legacy)`. `integrity_verified` stays false. The flag also accepts a newer run if both the signature and the seal claim were removed. A signature removed while the seal claim remains is still `Resealed run has no valid signature`.
+
+The HMAC shows that the covered bytes are unchanged to a holder of the key. The verifier needs that key. It is not public non-repudiation. It does not by itself prove who produced the run to someone who does not have the key. A person who has the key can rewrite the files and sign again.
+
+`resume` records `prior_seal_sha256` of the parent `integrity.json` bytes, and `prior_seal_key_id` when that parent seal was verified. A revision may record `prior_seal` with `seal_sha256`, `algorithm` (`hmac-sha256` or `unsigned`), and `key_id` when the algorithm is `hmac-sha256`. The child seal covers that record. Replay of the child does not open the parent directory. `matching_lineage` compares the recorded hash with a parent directory when both are supplied. A holder of the signing key can still write a false parent hash and sign the child.
 
 ## Identity, output authority and replay
 
 Plans record source hashes and a canonical content identity. Inputs and source code must retain their identities before execution. Plans, revisions and evidence outputs use fresh directories confined beneath package `evidence/`. Parent records are retained; earlier evidence is never overwritten. Symlink/junction traversal and unsafe output locations are refused.
 
-Retained run evidence binds outputs, observed status and elapsed times to a plan. Replay validates identities and reconstructs predicates from those retained records. A successful replay is evidence-integrity validation, not a new execution measurement. Missing, malformed or altered observations must fail rather than be synthesized.
+Retained run evidence binds outputs, observed status and elapsed times to a plan. The run seal binds that directory to a controller key, as specified above. Replay validates identities, checks the seal, and reconstructs predicates from those retained records. A replay whose signature status is `verified` is evidence-integrity validation for a holder of the key. It is not a new execution measurement and it is not a public attribution. `unsigned (legacy)` is not a verified replay. Missing, malformed or altered observations must fail rather than be synthesized.
 
 ## Archive inspection
 
@@ -133,4 +171,4 @@ The public-release inventory root is the package fixture directory. Mission inpu
 
 ## Human and external boundaries
 
-The code cannot resolve unclear intent, confer account permissions, establish human review, or issue arbitrary shell commands. It does not load local weights, train a model, mutate an external connector, publish, or edit its own source. `llm:grok` records one remote chat call or one local fixture read under the bounds above. A `gate` compares declared receipt fields. Passing one is not a quality score and does not set `human_review`. `human_approval` stores an approver id and a timestamp; that file is not a signature and not an account permission. Existing frozen research packages are not imported or changed.
+The code cannot resolve unclear intent, confer account permissions, establish human review, or issue arbitrary shell commands. It does not load local weights, train a model, mutate an external connector, publish, or edit its own source. `llm:grok` records one remote chat call or one local fixture read under the bounds above. A `gate` compares declared receipt fields. Passing one is not a quality score and does not set `human_review`. `human_approval` stores an approver id and a timestamp. Without declared approver key ids, that record is not authenticated. With them, the record can carry an HMAC for one of those key ids. That HMAC is not an account permission and does not set `human_review`. Existing frozen research packages are not imported or changed.

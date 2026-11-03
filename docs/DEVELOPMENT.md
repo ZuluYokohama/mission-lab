@@ -15,7 +15,15 @@ python -B -m research.mission_lab_v0_1 validate --mission research/mission_lab_v
 
 Run tests sequentially. Some tests launch registered Python workers and create temporary evidence under the package. Symbolic-link tests may skip on Windows without the necessary privilege; report those skips. Hosted checks use Python 3.12 on both Windows and Ubuntu. A local Windows result does not establish an Ubuntu result.
 
-For changes affecting planning, execution or evidence, run a fresh demonstration and replay both runs:
+Package tests are started with pytest. That loads a generated seal key from `tests/conftest.py`. Running those tests under `unittest` does not load the key, and a new run then fails with `Seal key is not configured`.
+
+For changes affecting planning, execution or evidence, generate a local seal key and run a fresh demonstration and replay both runs. The key is not `XAI_API_KEY`. Do not commit it. `evidence/` is gitignored.
+
+```text
+python -B -c "import os; from pathlib import Path; p = Path('research/mission_lab_v0_1/evidence') / 'dev-seal.key'; p.parent.mkdir(exist_ok=True); p.write_bytes(os.urandom(32))"
+```
+
+Then set `MISSION_LAB_SEAL_KEY_FILE` to that path and run:
 
 ```text
 python -B -m research.mission_lab_v0_1 demo --out evidence/dev_demo_001
@@ -23,6 +31,8 @@ python -B -m research.mission_lab_v0_1 replay --run research/mission_lab_v0_1/ev
 python -B -m research.mission_lab_v0_1 replay --run research/mission_lab_v0_1/evidence/dev_demo_001/revised_run
 git diff --exit-code
 ```
+
+CI runs `tools/ci_seal_key.py`, which writes a random key under the runner temp directory and appends `MISSION_LAB_SEAL_KEY_FILE` to `GITHUB_ENV`. That file is not a repository secret. The script does not print the key.
 
 Choose an unused output name for each demonstration. Existing evidence directories cannot be overwritten. Replay checks a recorded run; it is not a new independent execution. Review any intentional source diff separately if the final command reports changes.
 
