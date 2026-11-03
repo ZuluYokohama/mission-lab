@@ -1,6 +1,6 @@
 # Mission Lab v0.1 — experimental public preview
 
-Mission Lab connects a structured file-audit specification to an operator DAG, a bounded resource schedule, worker execution, verification receipts and evidence-driven revision. It runs registered SHA-256 and manifest operations. Runtime uses only the Python standard library.
+Mission Lab connects a structured file-audit specification to an operator DAG, a bounded resource schedule, worker execution, verification receipts and evidence-driven revision. It runs registered SHA-256 and manifest operations, an optional `llm:grok` chat-completions receipt, and a `gate` node that compares declared receipts before later work is launched. Passing a gate is not a quality score. Runtime uses only the Python standard library. The chat call uses a granted `XAI_API_KEY` when transport is `xai`. The fixture transport, the demo, and `fixtures/mission_gate.json` do not need `XAI_API_KEY` and do not call api.x.ai. A new run does need a local HMAC seal key. CI generates that key in the runner temp directory. It is not a repository secret and it is not sent to a model API.
 
 This preview has package tests and a reproducible fixture demonstration. Independent V&V and human intended-use validation are pending. Read [KNOWN_ISSUES.md](KNOWN_ISSUES.md) before relying on its validators. It is not a security sandbox or a safety-critical controller.
 
@@ -17,6 +17,8 @@ Python 3.12 is the tested version. No runtime installation or model download is 
 ```powershell
 python -B -m research.mission_lab_v0_1 --help
 python -B -m research.mission_lab_v0_1 validate --mission research/mission_lab_v0_1/fixtures/mission.json
+python -B -c "import os; from pathlib import Path; p = Path('research/mission_lab_v0_1/evidence') / 'dev-seal.key'; p.parent.mkdir(exist_ok=True); p.write_bytes(os.urandom(32))"
+$env:MISSION_LAB_SEAL_KEY_FILE = "research/mission_lab_v0_1/evidence/dev-seal.key"
 python -B -m research.mission_lab_v0_1 demo --out evidence/my_demo_001
 python -B -m research.mission_lab_v0_1 replay --run research/mission_lab_v0_1/evidence/my_demo_001/baseline_run
 python -B -m research.mission_lab_v0_1 inspect --root research/mission_lab_v0_1/fixtures --out evidence/my_inventory_001
@@ -24,7 +26,7 @@ python -B -m research.mission_lab_v0_1 inspect --root research/mission_lab_v0_1/
 
 Writing commands require a fresh directory under `research/mission_lab_v0_1/evidence/`. Reusing an output directory is refused. Generated evidence is local and ignored by Git: it can contain filesystem paths, PIDs, executable locations and timestamps. Inspect it before sharing.
 
-The other commands are `plan`, `run` and `replan`; use their `--help` for arguments. Missions accept 1–8 input files and a closed graph of at most 64 nodes. The public derivative confines file inputs to the checkout and confines metadata inspection to package fixtures. Broader archive adapters require a separately reviewed change.
+The other commands are `plan`, `run`, `replan`, and `resume`; use their `--help` for arguments. `resume` starts a new run of a sealed plan after an approval file is supplied. Without approver key ids on the gate, that file is an approver id and a timestamp and is not authenticated. A gate that lists approver key ids stays pending until the record's HMAC matches one of those keys. The seal key file above is local and gitignored; do not commit it. Missions accept 1–8 input files and a closed graph of at most 2048 nodes. The public derivative confines file inputs to the checkout and confines metadata inspection to package fixtures. Broader archive adapters require a separately reviewed change.
 
 ## Demonstration and boundaries
 

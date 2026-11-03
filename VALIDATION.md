@@ -6,6 +6,8 @@ These are results from the clean public derivative, not copied claims from the o
 
 Both fresh demonstration runs completed all ten tasks. Digest and byte count agreed exactly across the same three fixtures. The pattern binding changed from `whole_v1` to `stream_v1`. Replaying each run twice produced identical regenerated results and tables.
 
+The plan ids below belong to source identity `706806ec40d37608dd146e1a5f3f115f69dab7f185dfef39cbb7a3f18489d979` and to plans that do not carry a planner stamp. A current build stamps `coordinate-list-v2` and hashes the current sources, so a newly sealed plan id differs even when the bindings and schedule match. The current planner still selects `whole_v1` for the pattern file at the 4 MiB read-buffer profile and `stream_v1` at 64 KiB. That check is in the planner tests. The numbers in this file were not regenerated as a new measured demo. The recorded ten-task demo does not include a merit gate. `fixtures/mission_gate.json` is a separate fixture-transport mission, and the pass count above was not regenerated for it.
+
 | Run | Worker limit | Buffer limit (bytes) | Controller-observed peak reserved bytes | Succeeded tasks |
 |---|---:|---:|---:|---:|
 | baseline | 2 | 4194304 | 139265 | 10 |

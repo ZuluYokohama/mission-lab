@@ -1,0 +1,21 @@
+{
+  "estimate_origin": "injected_fixture",
+  "model_budget": {
+    "max_output_tokens": 16,
+    "max_requests": 1,
+    "max_spend": 252,
+    "max_total_tokens": 20,
+    "prices": {
+      "grok-test": {
+        "input": 3,
+        "output": 15,
+        "per": "token"
+      }
+    },
+    "unit": "micro-usd"
+  },
+  "read_buffer_bytes": 65536,
+  "schema_version": 1,
+  "timeout_seconds": 10,
+  "workers": 2
+}

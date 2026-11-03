@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
       - name: Check public files, licenses, provenance and documentation links
@@ -42,7 +42,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
       - name: Install pinned test dependencies
@@ -51,6 +51,8 @@ jobs:
         run: python -B -m pytest research/mission_lab_v0_1/tests -q -p no:cacheprovider
       - name: Validate the fixture specification
         run: python -B -m research.mission_lab_v0_1 validate --mission research/mission_lab_v0_1/fixtures/mission.json
+      - name: Generate a temporary seal key
+        run: python -B tools/ci_seal_key.py
       - name: Execute baseline and tighter-budget revision
         run: python -B -m research.mission_lab_v0_1 demo --out evidence/ci_demo
       - name: Replay baseline evidence

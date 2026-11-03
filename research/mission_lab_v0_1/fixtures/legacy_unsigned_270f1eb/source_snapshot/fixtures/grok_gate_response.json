@@ -1,0 +1,1 @@
+{"choices":[{"finish_reason":"stop","index":0,"message":{"content":"gate-fixture-ok","role":"assistant"}}],"model":"grok-test","usage":{"completion_tokens":2,"prompt_tokens":3,"total_tokens":5}}

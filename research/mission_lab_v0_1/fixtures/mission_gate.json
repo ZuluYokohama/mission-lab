@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "mission_id": "gate-fixture",
+  "requirements": [
+    {
+      "id": "merit",
+      "text": "Record one fixture chat call and advance the next call only when the declared gate passes.",
+      "acceptance_criteria": [
+        "Digest and byte count agree across the hash and reference",
+        "The fixture content hash matches the declared value",
+        "Reported total tokens are inside the declared bounds"
+      ],
+      "evidence_refs": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "reply",
+      "path": "grok_gate_response.json",
+      "size_bytes": 194,
+      "sha256": "4322d7b03f79255f2d1f1cf3a5f5be15fafff68adc0d3636abffc6b2c46864f6"
+    }
+  ],
+  "unresolved": [],
+  "tasks": [
+    {
+      "id": "hash:reply",
+      "operation": "sha256",
+      "input_id": "reply",
+      "depends_on": [],
+      "outputs": ["output:hash:reply"],
+      "state_reads": [],
+      "state_writes": ["output:hash:reply"]
+    },
+    {
+      "id": "reference:reply",
+      "operation": "reference_sha256",
+      "input_id": "reply",
+      "depends_on": [],
+      "outputs": ["output:reference:reply"],
+      "state_reads": [],
+      "state_writes": ["output:reference:reply"]
+    },
+    {
+      "id": "verify:reply",
+      "operation": "verify_digest",
+      "input_id": "reply",
+      "depends_on": ["hash:reply", "reference:reply"],
+      "outputs": ["output:verify:reply"],
+      "state_reads": ["output:hash:reply", "output:reference:reply"],
+      "state_writes": ["output:verify:reply"]
+    },
+    {
+      "id": "manifest",
+      "operation": "assemble_manifest",
+      "depends_on": ["verify:reply"],
+      "outputs": ["output:manifest"],
+      "state_reads": ["output:verify:reply"],
+      "state_writes": ["output:manifest"]
+    },
+    {
+      "id": "ask",
+      "operation": "llm:grok",
+      "model": "grok-test",
+      "max_output_tokens": 16,
+      "temperature": 0,
+      "timeout_seconds": 2,
+      "max_response_bytes": 4096,
+      "transport": "fixture",
+      "prompt": "ping",
+      "fixture_id": "reply",
+      "depends_on": ["verify:reply"],
+      "outputs": ["output:ask"],
+      "state_reads": ["output:verify:reply"],
+      "state_writes": ["output:ask"]
+    },
+    {
+      "id": "merit",
+      "operation": "gate",
+      "depends_on": ["ask", "hash:reply", "reference:reply"],
+      "outputs": ["output:merit"],
+      "state_reads": ["output:ask", "output:hash:reply", "output:reference:reply"],
+      "state_writes": ["output:merit"],
+      "predicate": {
+        "kind": "all",
+        "predicates": [
+          {
+            "kind": "digest_equal",
+            "nodes": ["hash:reply", "reference:reply"]
+          },
+          {
+            "kind": "llm_field",
+            "node": "ask",
+            "field": "content_sha256",
+            "equals": "19624095ed12be774a42f02c3773a553f36e260c071bf5003724ec2c483128c3"
+          },
+          {
+            "kind": "numeric_bounds",
+            "node": "ask",
+            "field": "total_tokens",
+            "minimum": 1,
+            "maximum": 16
+          }
+        ]
+      }
+    },
+    {
+      "id": "follow",
+      "operation": "llm:grok",
+      "model": "grok-test",
+      "max_output_tokens": 16,
+      "temperature": 0,
+      "timeout_seconds": 2,
+      "max_response_bytes": 4096,
+      "transport": "fixture",
+      "prompt": "next",
+      "fixture_id": "reply",
+      "depends_on": ["merit", "verify:reply"],
+      "outputs": ["output:follow"],
+      "state_reads": ["output:merit", "output:verify:reply"],
+      "state_writes": ["output:follow"]
+    }
+  ]
+}

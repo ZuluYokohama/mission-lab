@@ -16,6 +16,7 @@ from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = 'research/mission_lab_v0_1'
+LEGACY_RUN = PACKAGE + '/fixtures/legacy_unsigned_270f1eb/'
 LICENSE_SHA256 = 'ffcca38841adb694b6f380647e15f17c446a4d1656fed51a1e2041d064c94cc8'
 MAX_FILE_BYTES = 1024 * 1024
 FORBIDDEN_PARTS = {'evidence', '__pycache__', '.pytest_cache', 'node_modules', '.git'}
@@ -41,7 +42,7 @@ def path_error(name: str) -> str | None:
         return 'model, checkpoint or machine-state artifact is outside release scope'
     if path.suffix.lower() == '.bin' and name not in {
         PACKAGE + '/fixtures/empty.bin', PACKAGE + '/fixtures/abc.bin', PACKAGE + '/fixtures/pattern.bin'
-    }:
+    } and not name.startswith(LEGACY_RUN):
         return 'unregistered binary fixture'
     return None
 
@@ -225,7 +226,8 @@ def check(root: Path) -> dict:
             continue
         if PRIVATE_KEY.search(text):
             errors.append(name + ': private-key marker found')
-        if name.endswith('.md'):
+        # The retained run's markdown is archived source, not a current document.
+        if name.endswith('.md') and not name.startswith(LEGACY_RUN):
             errors.extend(link_errors(root, name, text, names))
     for name in ('LICENSE.md', PACKAGE + '/LICENSE.md'):
         if (root / name).is_file() and hashlib.sha256((root / name).read_bytes()).hexdigest() != LICENSE_SHA256:
