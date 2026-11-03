@@ -48,6 +48,47 @@ def evidence_dir():
     shutil.rmtree(path, ignore_errors=True)
 
 
+_LEGACY_FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "legacy_unsigned_270f1eb"
+
+
+def _install_legacy_run(dest):
+    """Copy the run generated at commit 270f1eb and retarget its input path.
+
+    The checked-in report.md is the pre-change renderer. This checkout's
+    absolute fixture path differs from the path recorded at generation, so the
+    copy substitutes that path and the plan id the substitution produces.
+    The rest of the report prose is unchanged. Replay does not reopen command
+    paths stored in observations.
+    """
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(_LEGACY_FIXTURE, dest)
+    plan = core.read_json(dest / "plan.json")
+    local = (core.ROOT / "fixtures" / "abc.bin").resolve()
+    recorded = plan["mission"]["inputs"][0]
+    if recorded["sha256"] != core.file_hash(local) or recorded["size_bytes"] != local.stat().st_size:
+        raise AssertionError("legacy fixture input does not match fixtures/abc.bin")
+    old_plan_id = plan["plan_id"]
+    plan["mission"]["inputs"][0] = {**recorded, "path": str(local)}
+    expected = planner.build_plan(plan["mission"], plan["resources"], sources=plan["sources"], check_files=True)
+    if expected["bindings"] != plan["bindings"] or expected["graph"] != plan["graph"]:
+        raise AssertionError("retarget changed the pre-change plan body")
+    (dest / "plan.json").write_text(core.canonical(expected), encoding="utf-8", newline="\n")
+    for name in ("semantic.json", "report.md"):
+        path = dest / name
+        text = path.read_text(encoding="utf-8")
+        if text.count(old_plan_id) != 1:
+            raise AssertionError(name + " does not contain the recorded plan id once")
+        path.write_text(text.replace(old_plan_id, expected["plan_id"]), encoding="utf-8", newline="\n")
+    receipts = core.read_json(dest / "input_receipts.json")
+    for row in receipts["inputs"]:
+        if row.get("id") == recorded["id"]:
+            row["path"] = expected["mission"]["inputs"][0]["path"]
+    (dest / "input_receipts.json").write_text(core.canonical(receipts), encoding="utf-8", newline="\n")
+    seal.rewrite_unsigned(dest)
+    return dest
+
+
 def _simple_plan(directory):
     source = directory / "abc.bin"
     source.write_bytes(b"abc")
@@ -244,6 +285,7 @@ def test_signed_run_verifies_and_the_key_stays_out_of_the_worker(evidence_dir, m
     assert replayed["seal_key_id"] == seal.key_id(key)
     text = (output / "report.md").read_text(encoding="utf-8")
     assert "Signature status: `signed`" in text
+    assert "Controller key variables cannot be granted and are not copied:" in text
     assert seal.key_id(key) in text
     withheld = core.read_json(output / "environment.json")["worker_environment"]["withheld_controller_key_names"]
     assert withheld == sorted(core.CONTROLLER_KEY_ENV)
@@ -310,14 +352,18 @@ def test_tamper_wrong_key_missing_key_and_legacy_are_distinct(evidence_dir, monk
         report.replay_run(output)
     monkeypatch.setenv("MISSION_LAB_SEAL_KEY_FILE", original_key)
 
-    legacy = evidence_dir / "legacy"
-    shutil.copytree(output, legacy)
-    semantic = core.read_json(legacy / "semantic.json")
+    stripped_claim = evidence_dir / "stripped-claim"
+    shutil.copytree(output, stripped_claim)
+    semantic = core.read_json(stripped_claim / "semantic.json")
     semantic.pop("seal")
-    (legacy / "semantic.json").write_text(core.canonical(semantic), encoding="utf-8", newline="\n")
-    observations = core.read_json(legacy / "observations.json")
-    (legacy / "report.md").write_text(report.render_report(semantic, observations), encoding="utf-8", newline="\n")
-    seal.rewrite_unsigned(legacy)
+    (stripped_claim / "semantic.json").write_text(core.canonical(semantic), encoding="utf-8", newline="\n")
+    seal.rewrite_unsigned(stripped_claim)
+    with pytest.raises(core.LabError, match="Resealed run has no valid signature"):
+        report.replay_run(stripped_claim, allow_legacy_unsigned=True)
+
+    legacy = _install_legacy_run(evidence_dir / "legacy")
+    assert core.read_json(legacy / "integrity.json")["hash_note"] == seal.LEGACY_HASH_NOTE
+    assert "withheld_controller_key_names" not in core.read_json(legacy / "environment.json")["worker_environment"]
     with pytest.raises(core.LabError, match="Unsigned seal"):
         report.replay_run(legacy)
     allowed = report.replay_run(legacy, allow_legacy_unsigned=True)
@@ -388,7 +434,7 @@ def test_signed_and_unsigned_approvals_and_resume_lineage(evidence_dir, monkeypa
     monkeypatch.delenv("MISSION_LAB_APPROVER_KEY", raising=False)
     missing = gates.evaluate(node, {"approval_status": "ok", "approvals": {"gate:merit": signed}})
     assert missing["outcome"] == "pending"
-    assert missing["reason"] == "approver key is not available"
+    assert missing["reason"] == "approver key is not available: " + key_id
     monkeypatch.setenv("MISSION_LAB_APPROVER_KEY", material.decode())
     malformed = evidence_dir / "malformed"
     malformed.mkdir()
@@ -437,6 +483,13 @@ def test_signed_and_unsigned_approvals_and_resume_lineage(evidence_dir, monkeypa
     assert semantic["resume_of"]["prior_seal_key_id"] == seal.key_id(seal.require_seal_key())
     lineage = seal.matching_lineage(resumed, pending_run)
     assert lineage["records"] == ["resume_of"]
+    mismatched = evidence_dir / "resume-plan"
+    shutil.copytree(resumed, mismatched)
+    mismatched_semantic = core.read_json(mismatched / "semantic.json")
+    mismatched_semantic["resume_of"]["plan_id"] = "ab" * 32
+    (mismatched / "semantic.json").write_text(core.canonical(mismatched_semantic), encoding="utf-8", newline="\n")
+    with pytest.raises(core.LabError, match="Prior run does not belong to the prior plan"):
+        seal.matching_lineage(mismatched, pending_run)
     assert report.replay_run(resumed)["signature_status"] == "verified"
     assert report.replay_run(resumed)["integrity_verified"] is True
     for path in resumed.rglob("*"):
@@ -458,26 +511,100 @@ def test_replan_records_the_parent_seal_and_replay_does_not_open_it(evidence_dir
     assert parent_key in (child / "report.md").read_text(encoding="utf-8")
     assert seal.matching_lineage(child, parent)["records"] == ["revision"]
     assert report.replay_run(child)["signature_status"] == "verified"
+
+    wrong_hash = evidence_dir / "wrong-hash"
+    shutil.copytree(child, wrong_hash)
+    semantic = core.read_json(wrong_hash / "semantic.json")
+    semantic["revision"]["prior_seal"]["seal_sha256"] = "ab" * 32
+    (wrong_hash / "semantic.json").write_text(core.canonical(semantic), encoding="utf-8", newline="\n")
+    with pytest.raises(core.LabError, match="Recorded lineage does not match the parent seal"):
+        seal.matching_lineage(wrong_hash, parent)
+
+    wrong_key = evidence_dir / "wrong-key"
+    shutil.copytree(child, wrong_key)
+    semantic = core.read_json(wrong_key / "semantic.json")
+    semantic["revision"]["prior_seal"]["key_id"] = "cd" * 32
+    (wrong_key / "semantic.json").write_text(core.canonical(semantic), encoding="utf-8", newline="\n")
+    with pytest.raises(core.LabError, match="Recorded lineage key id does not match the parent seal"):
+        seal.matching_lineage(wrong_key, parent)
+
+    other_source = evidence_dir / "other.bin"
+    other_source.write_bytes(b"xyz")
+    other_plan = planner.build_plan(
+        {"schema_version": 1, "mission_id": "other_fixture", "inputs": [
+            {"id": "alpha", "path": str(other_source), "size_bytes": 3, "sha256": core.file_hash(other_source)}],
+         "requirements": [{"id": "identity", "text": "Verify other bytes",
+                           "acceptance_criteria": ["Exact digest and byte count agree"], "evidence_refs": []}],
+         "unresolved": []},
+        _profile())
+    other_run = executor.run_plan_data(other_plan, evidence_dir / "other-run")
+    with pytest.raises(core.LabError, match="Prior run does not belong to the prior plan"):
+        replan.replan_data(plan, plan["resources"], _trigger(), prior_run=other_run)
+    borrowed = evidence_dir / "borrowed"
+    shutil.copytree(child, borrowed)
+    semantic = core.read_json(borrowed / "semantic.json")
+    semantic["revision"]["prior_seal"]["seal_sha256"] = core.file_hash(other_run / "integrity.json")
+    semantic["revision"]["prior_seal"]["key_id"] = parent_key
+    (borrowed / "semantic.json").write_text(core.canonical(semantic), encoding="utf-8", newline="\n")
+    with pytest.raises(core.LabError, match="Prior run does not belong to the prior plan"):
+        seal.matching_lineage(borrowed, other_run)
+
     moved = evidence_dir / "parent-moved"
     parent.rename(moved)
     replayed = report.replay_run(child)
     assert replayed["signature_status"] == "verified"
     assert replayed["integrity_verified"] is True
-    with pytest.raises(core.LabError):
+    with pytest.raises(core.LabError, match="Missing path"):
         seal.matching_lineage(child, parent)
 
-    legacy = evidence_dir / "legacy-parent"
-    shutil.copytree(moved, legacy)
-    semantic = core.read_json(legacy / "semantic.json")
-    semantic.pop("seal")
-    (legacy / "semantic.json").write_text(core.canonical(semantic), encoding="utf-8", newline="\n")
-    observations = core.read_json(legacy / "observations.json")
-    (legacy / "report.md").write_text(report.render_report(semantic, observations), encoding="utf-8", newline="\n")
-    seal.rewrite_unsigned(legacy)
+    legacy = _install_legacy_run(evidence_dir / "legacy-parent")
+    legacy_plan = core.load_plan(legacy / "plan.json")
     with pytest.raises(core.LabError, match="Unsigned seal"):
-        replan.replan_data(plan, plan["resources"], _trigger(), prior_run=legacy)
-    unsigned = replan.replan_data(plan, plan["resources"], _trigger(), prior_run=legacy, allow_legacy_unsigned=True)
+        replan.replan_data(legacy_plan, legacy_plan["resources"], _trigger(), prior_run=legacy)
+    unsigned = replan.replan_data(legacy_plan, legacy_plan["resources"], _trigger(), prior_run=legacy,
+                                  allow_legacy_unsigned=True)
     assert unsigned["revision"]["prior_seal"]["algorithm"] == "unsigned"
     assert unsigned["revision"]["prior_seal"]["seal_sha256"] == core.file_hash(legacy / "integrity.json")
     assert "key_id" not in unsigned["revision"]["prior_seal"]
     planner.validate_plan_record(unsigned)
+    claimed = evidence_dir / "legacy-child"
+    claimed.mkdir()
+    core.write_json(claimed / "semantic.json", {"revision": {
+        "prior_plan_id": legacy_plan["plan_id"],
+        "prior_seal": {"schema_version": 1, "seal_sha256": core.file_hash(legacy / "integrity.json"),
+                       "algorithm": "unsigned", "key_id": "ab" * 32},
+    }})
+    with pytest.raises(core.LabError, match="Recorded lineage key id does not match the parent seal"):
+        seal.matching_lineage(claimed, legacy, allow_legacy_unsigned=True)
+
+
+def test_approver_configuration_raises_before_evaluation_and_replay_names_the_key(evidence_dir, monkeypatch):
+    material = b"approver-key-" + b"bytes!!"
+    fingerprint = seal.key_id(material)
+    directory = evidence_dir / "approver-keys"
+    directory.mkdir()
+    (directory / "empty.key").write_bytes(b"")
+    monkeypatch.setenv("MISSION_LAB_APPROVER_KEY_DIR", str(directory))
+    executor.run_plan_data(_simple_plan(evidence_dir), evidence_dir / "hash-ok")
+    plan = planner.build_plan(_approval_mission([fingerprint]),
+                              _profile(workers=2, read_buffer_bytes=4 * 1024 * 1024, timeout_seconds=30))
+    blocked = evidence_dir / "not-started"
+    with pytest.raises(core.LabError, match=r"16\.\.4096"):
+        executor.run_plan_data(plan, blocked)
+    assert not blocked.exists()
+    monkeypatch.delenv("MISSION_LAB_APPROVER_KEY_DIR")
+    key_file = directory / "one.key"
+    key_file.write_bytes(material)
+    monkeypatch.setenv("MISSION_LAB_APPROVER_KEY", material.decode())
+    monkeypatch.setenv("MISSION_LAB_APPROVER_KEY_FILE", str(key_file))
+    with pytest.raises(core.LabError, match="ambiguous"):
+        executor.run_plan_data(plan, blocked)
+    assert not blocked.exists()
+    monkeypatch.delenv("MISSION_LAB_APPROVER_KEY_FILE")
+    pending = executor.run_plan_data(plan, evidence_dir / "pending-key")
+    signed = seal.sign_approval(_unsigned_record(), material)
+    passed = executor.resume_run(pending, evidence_dir / "passed-key", signed)
+    assert _task(core.read_json(passed / "semantic.json"), "gate:merit")["output"]["outcome"] == "pass"
+    monkeypatch.delenv("MISSION_LAB_APPROVER_KEY")
+    with pytest.raises(core.LabError, match="approver key is not available: " + fingerprint):
+        report.replay_run(passed)

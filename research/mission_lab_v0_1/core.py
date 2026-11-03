@@ -566,6 +566,9 @@ def source_manifest():
         relative = path.relative_to(ROOT)
         if set(relative.parts) & {"evidence", "__pycache__", ".pytest_cache"}:
             continue
+        # Retained pre-change run used to test legacy replay. It is not package source.
+        if "legacy_unsigned_270f1eb" in relative.parts:
+            continue
         if path.is_file():
             if has_link(path):
                 raise LabError("Source snapshot cannot contain links")

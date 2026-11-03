@@ -18,6 +18,10 @@ def render_report(semantic, observations):
     counts = counts_for(semantic)
     profile = semantic.get("profile", {})
     resources = profile.get("resources", {})
+    # A pre-change run has no seal claim. Its report bytes omit the controller-key
+    # sentence and keep the earlier gate and resume wording. New runs always store a claim.
+    seal_claim = semantic.get("seal") if isinstance(semantic, dict) else None
+    sealed = isinstance(seal_claim, dict)
     lines = ["# Mission execution evidence", "", f"Mission: `{semantic.get('mission_id')}`",
              f"Plan: `{semantic.get('plan_id')}`", "",
              "Result: " + ("accepted within the registered operator contract" if semantic.get("accepted") else "not accepted; retained failures require review"),
@@ -28,11 +32,10 @@ def render_report(semantic, observations):
              f"Cost-estimate origin: `{resources.get('estimate_origin')}`.",
              "Reservations constrain registered worker count and explicit input buffers. Total process memory, physical core use, and energy are unknown.",
              "Worker processes receive a deny-by-default environment: platform start names when set, two controller-forced interpreter flags, and per-task resource grants. Observations list those names and do not retain values.",
-             "Controller key variables cannot be granted and are not copied: " + ", ".join(f"`{name}`" for name in sorted(core.CONTROLLER_KEY_ENV)) + ".",
              "Predicted schedules use a bounded heuristic. Observed durations include worker startup after launch; costs may differ from predictions.", ""]
-    seal_claim = semantic.get("seal") if isinstance(semantic, dict) else None
-    if isinstance(seal_claim, dict):
+    if sealed:
         lines += ["", "## Seal", "",
+                  "Controller key variables cannot be granted and are not copied: " + ", ".join(f"`{name}`" for name in sorted(core.CONTROLLER_KEY_ENV)) + ".",
                   f"Signature status: `signed`. Algorithm: `{seal_claim.get('algorithm')}`. Key id: `{seal_claim.get('key_id')}`.",
                   "The signature is HMAC-SHA256 over the canonical integrity manifest. That manifest hashes the plan, events, receipts, gate outcomes, budget ledger, and the other files in the run. A verifier needs the same key. A match shows those bytes are unchanged to holders of the key. It is not a public signature, and it does not by itself prove who produced the run to someone who lacks the key.",
                   "Replay reports `verified` only after that HMAC matches. This line says `signed` because it was written when the seal was produced.",
@@ -70,9 +73,13 @@ def render_report(semantic, observations):
     gate_rows = [task for task in semantic.get("tasks", [])
                  if isinstance(task.get("output"), dict) and task["output"].get("outcome") in ("pass", "fail", "indeterminate", "pending")]
     if gate_rows:
+        if sealed:
+            pending_text = "Pending means the predicate is not yet a pass. An approval record names an approver id and a UTC timestamp. Without declared approver key ids, that record is not signed and not authenticated. When the predicate lists approver key ids, a missing or invalid HMAC stays pending and does not pass."
+        else:
+            pending_text = "Pending means `approvals.json` has no matching record. That file records an approver id and a timestamp. It is not signed and not authenticated."
         lines += ["", "## Merit gates", "",
                   "A gate receipt is pass, fail, indeterminate, or pending. The task status stays succeeded when the controller finishes the evaluation. Fail, indeterminate, and pending do not launch downstream tasks and do not charge their model reservations.",
-                  "Pending means the predicate is not yet a pass. An approval record names an approver id and a UTC timestamp. Without declared approver key ids, that record is not signed and not authenticated. When the predicate lists approver key ids, a missing or invalid HMAC stays pending and does not pass.",
+                  pending_text,
                   "", "| Gate | Outcome | Reason |", "|---|---|---|"]
         for task in sorted(gate_rows, key=lambda item: item["task_id"]):
             reason = str(task["output"].get("reason", "")).replace("|", "/").replace("`", "")
@@ -97,12 +104,18 @@ def render_report(semantic, observations):
         lines.append("")
     resume = semantic.get("resume_of") if isinstance(semantic, dict) else None
     if isinstance(resume, dict):
-        lines += ["", "## Resume", "",
-                  f"This run started again from plan `{resume.get('plan_id')}` after an approval record was copied into the run directory.",
-                  f"Prior semantic sha256: `{resume.get('prior_semantic_sha256')}`.",
-                  f"Prior seal sha256: `{resume.get('prior_seal_sha256', 'none')}`. Prior seal key id: `{resume.get('prior_seal_key_id', 'none')}`.",
-                  "This line does not reopen the prior run.",
-                  ""]
+        if sealed:
+            lines += ["", "## Resume", "",
+                      f"This run started again from plan `{resume.get('plan_id')}` after an approval record was copied into the run directory.",
+                      f"Prior semantic sha256: `{resume.get('prior_semantic_sha256')}`.",
+                      f"Prior seal sha256: `{resume.get('prior_seal_sha256', 'none')}`. Prior seal key id: `{resume.get('prior_seal_key_id', 'none')}`.",
+                      "This line does not reopen the prior run.",
+                      ""]
+        else:
+            lines += ["", "## Resume", "",
+                      f"This run started again from plan `{resume.get('plan_id')}` after an approval record was copied into the run directory.",
+                      f"Prior semantic sha256: `{resume.get('prior_semantic_sha256')}`. The approval record is not authenticated, and this line does not reopen the prior run.",
+                      ""]
     lines += ["", "## Observations", "",
               "| Task | Estimated duration (ns) | Observed duration (ns) | Reserved buffer bytes | Environment names |",
               "|---|---:|---:|---:|---|"]
@@ -149,7 +162,9 @@ def render_report(semantic, observations):
               "Different cache state, process startup, storage contention, and estimate error can explain timing differences.",
               "Matching digests supports the file-audit contract. It establishes no numerical-model, energy-saving, or general software-generation claim.",
               "An llm:grok receipt records the request, response hashes, provider-reported token counts, latency, and HTTP status. It does not score model quality or establish that the response is true.",
-              "A gate predicate compares declared receipt fields. Passing a gate is not a quality score or a human review of the mission. An approval HMAC, when required, is not that review.",
+              ("A gate predicate compares declared receipt fields. Passing a gate is not a quality score or a human review of the mission. An approval HMAC, when required, is not that review."
+               if sealed else
+               "A gate predicate compares declared receipt fields. Passing a gate is not a quality score, a signature, or a human review of the mission."),
               "Offline replay regenerates recorded outcomes and re-evaluates gate predicates from archived receipts. It performs no new independent execution and does not call a model.", ""]
     return "\n".join(lines)
 

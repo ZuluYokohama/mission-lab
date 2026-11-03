@@ -198,8 +198,34 @@ def evaluate(node, evidence):
     return _check_receipt(receipt)
 
 
+def prepare_approver_keys(graph):
+    """Load approver keys before any gate evaluation that lists approver key ids.
+
+    A short key, a missing file, both single-key sources, or a short file in the
+    key directory raises here. No approver key configured does not raise. A key
+    id that is absent from the loaded map stays pending during evaluation.
+    """
+    if not any(isinstance(node, dict) and node.get("operation") == "gate"
+               and _predicate_needs_approver_key(node.get("predicate")) for node in graph):
+        return None
+    from .seal import load_approver_keys
+    return load_approver_keys()
+
+
+def _predicate_needs_approver_key(predicate):
+    if not isinstance(predicate, dict):
+        return False
+    if predicate.get("kind") == "human_approval" and predicate.get("approver_key_ids"):
+        return True
+    children = predicate.get("predicates")
+    if isinstance(children, list):
+        return any(_predicate_needs_approver_key(child) for child in children)
+    return False
+
+
 def reevaluate_archived(plan, tasks, observations, run):
     """Recompute every succeeded gate from archived evidence. Blocked gates have no receipt."""
+    prepare_approver_keys(plan["graph"])
     nodes = {node["id"]: node for node in plan["graph"]}
     by_task = {task["task_id"]: task for task in tasks}
     evidence = evidence_from(tasks, observations, run)
@@ -226,6 +252,9 @@ def reevaluate_archived(plan, tasks, observations, run):
             raise LabError("Gate predicate does not match the receipt")
         receipt = evaluate(node, evidence)
         if output != receipt:
+            reason = receipt.get("reason") if isinstance(receipt, dict) else None
+            if receipt.get("outcome") == "pending" and isinstance(reason, str) and reason.startswith("approver key is not available"):
+                raise LabError("Gate receipt does not match the archived evidence: " + reason)
             raise LabError("Gate receipt does not match the archived evidence")
     return True
 
@@ -515,7 +544,7 @@ def _signed_approval(record, required):
     from .seal import approval_mac_matches, load_approver_keys
     key = load_approver_keys().get(signed_id)
     if key is None:
-        return "pending", "approver key is not available"
+        return "pending", "approver key is not available: " + signed_id
     if not approval_mac_matches(record, key):
         return "pending", "approval signature is not valid"
     return "pass", "approval signature matches approver key " + signed_id

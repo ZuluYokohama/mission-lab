@@ -1,0 +1,10 @@
+{"buffer_limit": 65536, "enforced_task_timeout_seconds": 60.0, "kind": "run_started", "monotonic_ns": 3300099090956, "sequence": 0, "task_id": null, "workers_limit": 1}
+{"environment_names": ["HOME", "LANG", "LC_ALL", "PATH", "PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED"], "kind": "launched", "monotonic_ns": 3300105704702, "pid": 4331, "reserved_buffer_bytes": 3, "sequence": 1, "task_id": "reference:alpha", "used_buffer_bytes": 3, "workers_active": 1}
+{"kind": "completed", "monotonic_ns": 3300138184974, "sequence": 2, "status": "succeeded", "task_id": "reference:alpha", "used_buffer_bytes": 0, "workers_active": 0}
+{"environment_names": ["HOME", "LANG", "LC_ALL", "PATH", "PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED"], "kind": "launched", "monotonic_ns": 3300144047426, "pid": 4333, "reserved_buffer_bytes": 3, "sequence": 3, "task_id": "hash:alpha", "used_buffer_bytes": 3, "workers_active": 1}
+{"kind": "completed", "monotonic_ns": 3300176209409, "sequence": 4, "status": "succeeded", "task_id": "hash:alpha", "used_buffer_bytes": 0, "workers_active": 0}
+{"environment_names": ["HOME", "LANG", "LC_ALL", "PATH", "PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED"], "kind": "launched", "monotonic_ns": 3300182457210, "pid": 4335, "reserved_buffer_bytes": 0, "sequence": 5, "task_id": "verify:alpha", "used_buffer_bytes": 0, "workers_active": 1}
+{"kind": "completed", "monotonic_ns": 3300214851880, "sequence": 6, "status": "succeeded", "task_id": "verify:alpha", "used_buffer_bytes": 0, "workers_active": 0}
+{"environment_names": ["HOME", "LANG", "LC_ALL", "PATH", "PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED"], "kind": "launched", "monotonic_ns": 3300221030713, "pid": 4337, "reserved_buffer_bytes": 0, "sequence": 7, "task_id": "manifest", "used_buffer_bytes": 0, "workers_active": 1}
+{"kind": "completed", "monotonic_ns": 3300253168722, "sequence": 8, "status": "succeeded", "task_id": "manifest", "used_buffer_bytes": 0, "workers_active": 0}
+{"accepted": true, "kind": "run_completed", "monotonic_ns": 3300259202649, "sequence": 9, "task_id": null}

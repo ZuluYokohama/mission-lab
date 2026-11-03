@@ -235,6 +235,8 @@ def run_plan_data(plan, out, *, approvals=None, resume_of=None):
     nodes = _check_plan(plan)
     _check_inputs(plan)
     resume_of = _check_resume(plan, resume_of)
+    from .gates import prepare_approver_keys
+    prepare_approver_keys(plan["graph"])
     directory = new_output(out)
     resource_contract = "registered worker slots and explicit input buffers; an llm:grok task reserves only declared prompt or fixture bytes and caps the response separately; a gate reserves neither a read buffer nor a model budget and is evaluated by the controller; controller integrity checks, process overhead, RSS, cores and energy are outside this reservation"
     if "model_budget" in plan["resources"]:

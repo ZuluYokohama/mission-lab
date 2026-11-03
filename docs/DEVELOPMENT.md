@@ -40,7 +40,7 @@ Choose an unused output name for each demonstration. Existing evidence directori
 
 Keep the `research/mission_lab_v0_1` namespace and run from the checkout. Workspace confinement, source snapshots and worker imports depend on this layout. Installed wheels and editable packaging are not supported workflows for this preview.
 
-The source manifest includes every package file except evidence and recognized caches, plus `research/__init__.py`. Documentation, fixture and test changes inside that boundary change the source identity. Create new plans and evidence after such changes. Retain earlier evidence and its original identity; do not update old receipts to make them match new code.
+The source manifest includes every package file except evidence, recognized caches, and `fixtures/legacy_unsigned_270f1eb` (a retained pre-change run), plus `research/__init__.py`. Documentation, fixture and test changes inside that boundary change the source identity. Create new plans and evidence after such changes. Retain earlier evidence and its original identity; do not update old receipts to make them match new code.
 
 Repository workflow documents and configuration outside the package do not enter that package identity. The complete Git commit still identifies the repository release. `.gitattributes` keeps ordinary text in LF form and binary fixtures byte-preserved. `research/__init__.py` deliberately retains its existing CRLF bytes with `-text` to preserve the recorded package identity.
 

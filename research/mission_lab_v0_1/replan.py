@@ -130,6 +130,9 @@ def replan_data(prior, resources, trigger, *, mission=None, prior_run=None, allo
     if prior_run is not None:
         from .report import verify_integrity
         checked, status = verify_integrity(prior_run, allow_legacy_unsigned=allow_legacy_unsigned)
+        parent_plan = core.read_json(checked / "plan.json")
+        if not isinstance(parent_plan, dict) or parent_plan.get("plan_id") != prior["plan_id"]:
+            raise core.LabError("Prior run does not belong to the prior plan")
         updated["revision"]["prior_seal"] = seal.lineage_record(checked, status)
     return core.seal_plan(updated)
 

@@ -37,6 +37,10 @@ HASH_NOTE = (
     "The signature is HMAC-SHA256 over the canonical manifest for holders of the recorded key. "
     "It is not public non-repudiation and it is not proof of semantic truth."
 )
+# The executor wrote this note before signatures existed. A run that still carries
+# HASH_NOTE, or withheld_controller_key_names, is a post-change run even if the
+# signature and the seal claim were both removed.
+LEGACY_HASH_NOTE = "Integrity only; not source authenticity or proof of semantic truth"
 KEY_ID_LABEL = b"mission-lab.key-id.v1"
 MIN_KEY_BYTES = 16
 MAX_KEY_BYTES = 4096
@@ -242,20 +246,29 @@ def lineage_record(directory, status):
 
 
 def matching_lineage(child, parent, *, allow_legacy_unsigned=False):
-    """Compare a child's recorded parent hash with the parent seal. Replay does not call this."""
+    """Compare a child's recorded parent hash with the parent seal. Replay does not call this.
+
+    The parent directory's plan id must be the plan id the child recorded.
+    """
     parent, status = verify_directory(parent, allow_legacy_unsigned=allow_legacy_unsigned)
     parent_hash = file_hash(parent / "integrity.json")
+    parent_plan = read_json(parent / "plan.json")
+    parent_plan_id = parent_plan.get("plan_id") if isinstance(parent_plan, dict) else None
     semantic = read_json(Path(child) / "semantic.json")
     if not isinstance(semantic, dict):
         raise LabError("Recorded lineage does not match the parent seal")
     found = []
     resume = semantic.get("resume_of")
     if isinstance(resume, dict) and resume.get("prior_seal_sha256") == parent_hash:
+        if resume.get("plan_id") != parent_plan_id:
+            raise LabError("Prior run does not belong to the prior plan")
         _recorded_key(resume.get("prior_seal_key_id"), status)
         found.append("resume_of")
     revision = semantic.get("revision")
     prior = revision.get("prior_seal") if isinstance(revision, dict) else None
     if isinstance(prior, dict) and prior.get("seal_sha256") == parent_hash:
+        if not isinstance(revision, dict) or revision.get("prior_plan_id") != parent_plan_id:
+            raise LabError("Prior run does not belong to the prior plan")
         _recorded_key(prior.get("key_id"), status)
         found.append("revision")
     if not found:
@@ -267,7 +280,7 @@ def _verify_signature(output, manifest, *, allow_legacy_unsigned):
     claim = _seal_claim(output)
     signature = manifest.get("signature")
     if signature is None:
-        if claim is not None:
+        if claim is not None or _post_change_run(output, manifest):
             raise LabError("Resealed run has no valid signature")
         if allow_legacy_unsigned:
             return {"status": "unsigned (legacy)", "algorithm": None, "key_id": None}
@@ -287,6 +300,26 @@ def _verify_signature(output, manifest, *, allow_legacy_unsigned):
     if claim is not None and (claim["algorithm"] != parsed["algorithm"] or claim["key_id"] != parsed["key_id"]):
         raise LabError("Seal claim does not match the signature")
     return {"status": "verified", "algorithm": parsed["algorithm"], "key_id": parsed["key_id"]}
+
+
+def _post_change_run(output, manifest):
+    """True when the directory still has a marker this version writes and the pre-change executor did not.
+
+    The HMAC hash note and withheld_controller_key_names survive deletion of the
+    signature and the seal claim. A directory rewritten to the pre-change shape
+    has neither marker and is not distinguishable here.
+    """
+    if manifest.get("hash_note") == HASH_NOTE:
+        return True
+    path = Path(output) / "environment.json"
+    if not path.is_file():
+        return False
+    try:
+        document = read_json(path)
+    except LabError:
+        return False
+    worker = document.get("worker_environment") if isinstance(document, dict) else None
+    return isinstance(worker, dict) and "withheld_controller_key_names" in worker
 
 
 def _seal_claim(output):
