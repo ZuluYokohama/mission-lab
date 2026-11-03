@@ -331,6 +331,21 @@ def test_replay_rejects_a_second_terminal_event(evidence_dir):
         report.replay_run(worker_run)
 
 
+def test_replay_rejects_completion_after_an_earlier_terminal(evidence_dir):
+    plan = planner.build_plan(_mission(), _profile())
+    assert "model_budget" not in plan["resources"]
+    output = executor.run_plan_data(plan, evidence_dir / "blocked-before-launch")
+
+    def block_before_launch(rows):
+        index = next(i for i, row in enumerate(rows) if row.get("kind") == "launched" and row.get("task_id") == "hash:reply")
+        blocked = {"sequence": 0, "kind": "blocked", "task_id": "hash:reply", "monotonic_ns": rows[index]["monotonic_ns"]}
+        return rows[:index] + [blocked] + rows[index:]
+
+    _rewrite_events(output, block_before_launch)
+    with pytest.raises(core.LabError, match="Repeated terminal event"):
+        report.replay_run(output)
+
+
 def test_default_gate_evidence_text_is_truncated():
     reason = "x" * 200
     tasks = [{"task_id": f"g{index}", "output": {"outcome": "fail", "reason": reason}} for index in range(8)]
