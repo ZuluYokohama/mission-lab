@@ -302,6 +302,49 @@ class ExecutorTests(unittest.TestCase):
                 self.assertNotIn(granted_value.encode(), data)
         from research.mission_lab_v0_1 import report
         self.assertTrue(report.replay_run(output)["accepted"])
+        original_observations = (output / "observations.json").read_text(encoding="utf-8")
+        original_events = (output / "events.jsonl").read_text(encoding="utf-8")
+        original_integrity = (output / "integrity.json").read_text(encoding="utf-8")
+        rows = core.read_json(output / "observations.json")
+        events = [json.loads(line) for line in original_events.splitlines()]
+        present = [name for name in ("WINDIR", "TZ", "PATHEXT", "TMPDIR", "LC_ALL", "APPDATA", "LANG")
+                   if all(name not in row["environment_names"] for row in rows)
+                   and all(name not in (event.get("environment_names") or []) for event in events if event.get("kind") == "launched")]
+        self.assertTrue(present, "expected an allowed platform name that this run did not pass")
+        extra = present[0]
+
+        def reseal():
+            manifest = core.read_json(output / "integrity.json")
+            manifest["files"] = {path.relative_to(output).as_posix(): core.file_hash(path)
+                                 for path in output.rglob("*") if path.is_file() and path.name != "integrity.json"}
+            if "semantic_sha256" in manifest:
+                manifest["semantic_sha256"] = core.file_hash(output / "semantic.json")
+            (output / "integrity.json").write_text(core.canonical(manifest), encoding="utf-8", newline="\n")
+
+        def restore():
+            (output / "observations.json").write_text(original_observations, encoding="utf-8", newline="\n")
+            (output / "events.jsonl").write_text(original_events, encoding="utf-8", newline="\n")
+            (output / "integrity.json").write_text(original_integrity, encoding="utf-8", newline="\n")
+
+        def contradict():
+            reseal()
+            with self.assertRaises(core.LabError) as caught:
+                report.replay_run(output)
+            self.assertIn("contradicts the launch event", str(caught.exception))
+            restore()
+
+        for row in rows:
+            if row["task_id"] == "hash:alpha":
+                row["environment_names"] = sorted(set(row["environment_names"]) | {extra})
+        (output / "observations.json").write_text(core.canonical(rows), encoding="utf-8", newline="\n")
+        contradict()
+        for event in events:
+            if event.get("kind") == "launched" and event.get("task_id") == "hash:alpha":
+                event["environment_names"] = sorted(set(event["environment_names"]) | {extra})
+        (output / "events.jsonl").write_text(
+            "".join(json.dumps(event, sort_keys=True, allow_nan=False) + "\n" for event in events),
+            encoding="utf-8", newline="\n")
+        contradict()
         rows = core.read_json(output / "observations.json")
         events = [json.loads(line) for line in (output / "events.jsonl").read_text(encoding="utf-8").splitlines()]
         for row in rows:
@@ -348,6 +391,8 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(results["verify:alpha"]["status"], "blocked")
         self.assertIn("reference:alpha", launches)
         self.assert_integrity(output)
+        from research.mission_lab_v0_1 import report
+        self.assertFalse(report.replay_run(output)["accepted"])
 
 
 if __name__ == "__main__":

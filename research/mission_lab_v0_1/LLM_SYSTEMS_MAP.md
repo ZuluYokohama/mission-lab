@@ -1,6 +1,10 @@
 # LLM variables, operators, artifacts and mission boundaries
 
-This is a technical extension map. The implemented v0.1 operators only hash, compare and assemble tiny fixture artifacts. No LLM runtime, tensor library, retrieval engine or trainer is activated by this document.
+This is a technical extension map. It is not an executable specification. The registered runtime hashes files, compares digests, assembles a manifest, and, through `llm:grok`, records one remote chat-completions call or one local fixture read. That operator does not implement the forward pass, sampler, cache, or trainer described below, and it does not score model quality. No tensor library, retrieval engine, or local weight file is activated by this document.
+
+## Registered remote call
+
+`llm:grok`, candidate `chat_v1`, is a scheduler and receipt boundary. The mission names a model id and bounds. Transport `xai` sends one non-streaming user message to `https://api.x.ai/v1/chat/completions`. Transport `fixture` substitutes a declared file. The evidence is the request hash, the response hash, provider-reported token counts, latency, HTTP status, and a hash-addressed copy of the assistant text. None of those fields measures the variables in the tables below. Replay checks the archive and does not repeat the call.
 
 ## Executable representation
 

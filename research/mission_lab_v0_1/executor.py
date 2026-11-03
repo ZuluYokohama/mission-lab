@@ -16,6 +16,7 @@ import platform
 from .core import (ARCHIVE, FORCED_WORKER_ENV, LabError, REVISIONS, ROOT, WORKSPACE, canonical, confined_path,
                    digest_object, file_hash, load_plan, new_output, platform_env_names, read_json, verify_sources,
                    worker_environment, write_json)
+from . import grok
 from .operators import required_buffer
 
 
@@ -52,10 +53,12 @@ def _snapshot_sources(plan, directory):
 def _snapshot_inputs(plan, directory):
     receipts = []
     fixture_root = (ROOT / "fixtures").resolve()
+    grok_inputs = grok.llm_input_ids(plan["graph"])
     for index, artifact in enumerate(plan["mission"]["inputs"]):
         source = Path(artifact["path"])
         receipt = {**artifact, "archived": False, "snapshot": None}
-        if source.resolve().is_relative_to(fixture_root):
+        # Prompt and fixture bytes have to remain available for offline replay.
+        if artifact["id"] in grok_inputs or source.resolve().is_relative_to(fixture_root):
             target = directory / "input_snapshot" / (str(index) + ".bin")
             target.parent.mkdir(exist_ok=True)
             with source.open("rb") as reader, target.open("xb") as writer:
@@ -86,7 +89,7 @@ def _check_plan(plan):
         binding = plan["bindings"][node["id"]]
         if binding.get("revision") != REVISIONS.get(binding.get("candidate")):
             raise LabError("Unknown registered implementation revision")
-        needed = required_buffer(node["operation"], binding["candidate"], inputs.get(node.get("input_id")))
+        needed = required_buffer(node["operation"], binding["candidate"], inputs.get(node.get("input_id")), node=node, inputs=inputs)
         if binding.get("buffer_bytes") != needed or needed > plan["resources"]["read_buffer_bytes"]:
             raise LabError("Invalid or infeasible read-buffer reservation")
     return nodes
@@ -127,6 +130,8 @@ def _validate_result(value, job, exit_code):
         expected.sort(key=lambda row: row["input_id"])
         if output != {"artifacts": expected}:
             raise LabError("Worker manifest does not match verified dependencies")
+    elif operation == "llm:grok":
+        grok.accept_worker_output(output, job)
     else:
         raise LabError("Unknown worker result operation")
     return value
@@ -143,7 +148,7 @@ def run_plan_data(plan, out):
     write_json(directory / "environment.json", {
         "schema_version": 1, "python_version": sys.version, "executable": sys.executable,
         "platform": platform.platform(), "started_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "resource_contract": "registered worker slots and explicit input buffers; controller integrity checks, process overhead, RSS, cores and energy are outside this reservation",
+        "resource_contract": "registered worker slots and explicit input buffers; an llm:grok task reserves only declared prompt or fixture bytes and caps the response separately; controller integrity checks, process overhead, RSS, cores and energy are outside this reservation",
         "worker_environment": {
             "schema_version": 1, "default": "deny", "platform_names": list(platform_env_names()),
             "forced_names": sorted(FORCED_WORKER_ENV), "values_recorded": False,
@@ -219,6 +224,13 @@ def run_plan_data(plan, out):
                 job = {"schema_version": 1, "node": node, "binding": binding,
                        "input": inputs.get(node.get("input_id")),
                        "dependencies": {dep: results[dep] for dep in node["depends_on"]}}
+                if node["operation"] == "llm:grok":
+                    if node.get("transport") == "fixture":
+                        job["fixture"] = inputs[node["fixture_id"]]
+                    job["captures"] = {
+                        "response_path": str((private / (str(index) + "_llm_response.bin")).resolve()),
+                        "content_path": str((private / (str(index) + "_llm_content.bin")).resolve()),
+                    }
                 job_path = private / (str(index) + "_job.json")
                 result_path = private / (str(index) + "_worker_result.json")
                 stdout_path = private / (str(index) + "_stdout.txt")
@@ -281,6 +293,8 @@ def run_plan_data(plan, out):
                 else:
                     try:
                         result = _validate_result(read_json(active["result_path"]), active["job"], code)
+                        if result["status"] == "succeeded" and active["job"]["node"]["operation"] == "llm:grok":
+                            grok.promote_artifacts(directory, result["output"], active["job"])
                     except Exception as error:
                         result = _failure(task_id, error)
                 results[task_id] = result

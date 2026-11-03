@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parent
 WORKSPACE = ROOT.parents[1]
 ARCHIVE = ROOT / "fixtures"
 SCHEMA = 1
-OPERATIONS = {"sha256", "reference_sha256", "verify_digest", "assemble_manifest"}
-REVISIONS = {"whole_v1": "1", "stream_v1": "1", "reference_v1": "1", "compare_v1": "1", "manifest_v1": "1"}
+OPERATIONS = {"sha256", "reference_sha256", "verify_digest", "assemble_manifest", "llm:grok"}
+REVISIONS = {"whole_v1": "1", "stream_v1": "1", "reference_v1": "1", "compare_v1": "1", "manifest_v1": "1", "chat_v1": "1"}
 OPERATOR_CONTRACTS = {
     "sha256": {"schema_version": 1, "input_type": "file_artifact_ref", "output_type": "digest_record",
                "candidates": {"whole_v1": "1", "stream_v1": "1"},
@@ -31,6 +31,16 @@ OPERATOR_CONTRACTS = {
     "assemble_manifest": {"schema_version": 1, "input_type": "verified_digest_records", "output_type": "artifact_manifest",
                           "candidates": {"manifest_v1": "1"}, "preconditions": ["all input verifications succeeded"],
                           "postconditions": ["exactly one digest/size row per input"], "effects": "read dependencies; own one staged manifest"},
+    "llm:grok": {"schema_version": 1, "input_type": "prompt_text_or_file_artifact_ref", "output_type": "grok_chat_receipt",
+                 "candidates": {"chat_v1": "1"},
+                 "preconditions": ["declared grok model id and bounded generation parameters",
+                                   "exactly one inline prompt or confined prompt file",
+                                   "transport xai has an XAI_API_KEY grant, or transport fixture has a confined response file",
+                                   "request timeout is at least one second below the profile timeout"],
+                 "postconditions": ["receipt records model, parameters, request and response hashes, reported token usage, latency, and HTTP status",
+                                    "response content is stored as a hash-addressed artifact",
+                                    "the API key is not recorded"],
+                 "effects": "one chat completion call or one local fixture read; own one staged receipt and response artifacts"},
 }
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$")
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
@@ -420,19 +430,35 @@ def load_mission(path):
     return validate_mission(read_json(path), Path(path).resolve().parent)
 
 
+def validate_node_record(node):
+    """Closed node schema. llm:grok scalars are canonicalized in place."""
+    if not isinstance(node, dict):
+        raise LabError("node must be an object")
+    operation = node.get("operation")
+    if not isinstance(operation, str) or operation not in OPERATIONS:
+        raise LabError("Unsupported operation")
+    base = ("id", "operation", "depends_on", "outputs", "state_reads", "state_writes")
+    if operation == "llm:grok":
+        fields(node, base + ("model", "max_output_tokens", "temperature", "timeout_seconds", "max_response_bytes", "transport"),
+               ("input_id", "prompt", "fixture_id"), "node")
+        from .grok import normalize_llm_fields
+        normalize_llm_fields(node)
+    else:
+        fields(node, base, ("input_id",), "node")
+    return node
+
+
 def validate_graph(graph, inputs):
     if not isinstance(graph, list) or not 1 <= len(graph) <= 64:
         raise LabError("Graph requires 1..64 nodes")
     known_inputs = {item["id"] for item in inputs}
     nodes, writers = {}, {}
     for node in graph:
-        fields(node, ("id", "operation", "depends_on", "outputs", "state_reads", "state_writes"), ("input_id",), "node")
+        validate_node_record(node)
         nid = identifier(node["id"], "node id")
         if nid in nodes:
             raise LabError("Duplicate node id")
         nodes[nid] = node
-        if not isinstance(node["operation"], str) or node["operation"] not in OPERATIONS:
-            raise LabError("Unsupported operation")
         for key in ("depends_on", "outputs", "state_reads", "state_writes"):
             strings(node[key], key)
             if len(set(node[key])) != len(node[key]):
@@ -444,10 +470,11 @@ def validate_graph(graph, inputs):
             if output in writers:
                 raise LabError("Conflicting output/state writers")
             writers[output] = nid
-        if node["operation"] != "assemble_manifest" and (not isinstance(node.get("input_id"), str) or node.get("input_id") not in known_inputs):
+        if node["operation"] == "assemble_manifest":
+            if "input_id" in node:
+                raise LabError("Manifest has no direct input file")
+        elif node["operation"] != "llm:grok" and (not isinstance(node.get("input_id"), str) or node.get("input_id") not in known_inputs):
             raise LabError("Unknown graph input")
-        if node["operation"] == "assemble_manifest" and "input_id" in node:
-            raise LabError("Manifest has no direct input file")
     remaining, ordered = set(nodes), []
     while remaining:
         ready = sorted(nid for nid in remaining if set(nodes[nid]["depends_on"]) <= set(ordered))
@@ -474,6 +501,9 @@ def validate_graph(graph, inputs):
         if op == "assemble_manifest":
             if not deps or any(nodes[d]["operation"] != "verify_digest" for d in deps):
                 raise LabError("Manifest requires verified artifacts")
+        if op == "llm:grok":
+            from .grok import validate_llm_wiring
+            validate_llm_wiring(node, nodes, inputs)
         expected_reads = sorted(nodes[d]["outputs"][0] for d in deps)
         if sorted(node["state_reads"]) != expected_reads:
             raise LabError("State interfaces mismatch dependency outputs")

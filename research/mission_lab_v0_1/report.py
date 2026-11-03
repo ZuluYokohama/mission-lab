@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 
-from . import core
+from . import core, grok
 
 
 def counts_for(semantic):
@@ -19,7 +19,7 @@ def render_report(semantic, observations):
     resources = profile.get("resources", {})
     lines = ["# Mission execution evidence", "", f"Mission: `{semantic.get('mission_id')}`",
              f"Plan: `{semantic.get('plan_id')}`", "",
-             "Result: " + ("accepted within the registered file-audit contract" if semantic.get("accepted") else "not accepted; retained failures require review"),
+             "Result: " + ("accepted within the registered operator contract" if semantic.get("accepted") else "not accepted; retained failures require review"),
              "", "Machine verification is not human review or independent scientific reproduction.", "",
              "Requirement prose is retained for alignment; its semantic adequacy remains unreviewed.", "",
              "## Resource and measurement boundary", "",
@@ -34,10 +34,28 @@ def render_report(semantic, observations):
     lines += ["", "| Task | Status | SHA-256 / verification | Bytes |", "|---|---|---|---:|"]
     for task in sorted(semantic.get("tasks", []), key=lambda item: item["task_id"]):
         output = task.get("output") or {}
-        detail = output.get("sha256", "passed" if output.get("passed") is True else "—")
-        lines.append(f"| {task['task_id']} | {task['status']} | {detail} | {output.get('size_bytes', '—')} |")
+        if output.get("sha256"):
+            detail = output["sha256"]
+        elif output.get("passed") is True:
+            detail = "passed"
+        elif output.get("response_sha256"):
+            detail = output["response_sha256"]
+        else:
+            detail = "—"
+        if "size_bytes" in output:
+            shown_bytes = output["size_bytes"]
+        elif "response_bytes" in output:
+            shown_bytes = output["response_bytes"]
+        else:
+            shown_bytes = "—"
+        lines.append(f"| {task['task_id']} | {task['status']} | {detail} | {shown_bytes} |")
         if task.get("error"):
-            lines += ["", f"Retained error for `{task['task_id']}`: `{str(task['error']).replace('`', '')}`", ""]
+            error = task["error"]
+            if isinstance(error, dict):
+                rendered_error = str({key: error[key] for key in sorted(error)})
+            else:
+                rendered_error = str(error)
+            lines += ["", f"Retained error for `{task['task_id']}`: `{rendered_error.replace('`', '')}`", ""]
     lines += ["", "## Observations", "",
               "| Task | Estimated duration (ns) | Observed duration (ns) | Reserved buffer bytes | Environment names |",
               "|---|---:|---:|---:|---|"]
@@ -51,8 +69,9 @@ def render_report(semantic, observations):
             lines.append(f"| {observation['task_id']} | {predicted} | {observation['duration_ns']} | {observation.get('reserved_buffer_bytes', '—')} | {rendered} |")
     lines += ["", "## Limits and alternative explanations", "",
               "Different cache state, process startup, storage contention, and estimate error can explain timing differences.",
-              "Matching digests supports this file-audit contract. It establishes no numerical-model, energy-saving, or general software-generation claim.",
-              "Offline replay regenerates recorded outcomes and tables; it performs no new independent execution.", ""]
+              "Matching digests supports the file-audit contract. It establishes no numerical-model, energy-saving, or general software-generation claim.",
+              "An llm:grok receipt records the request, response hashes, provider-reported token counts, latency, and HTTP status. It does not score model quality or establish that the response is true.",
+              "Offline replay regenerates recorded outcomes and tables. It performs no new independent execution and does not call a model.", ""]
     return "\n".join(lines)
 
 
@@ -141,10 +160,13 @@ def replay_run(run):
             snapshot = core.confined_path(output / receipt["snapshot"], [output / "input_snapshot"])
             if snapshot.stat().st_size != receipt["size_bytes"] or core.file_hash(snapshot) != receipt["sha256"]:
                 raise core.LabError("Input snapshot contradicts receipt")
+    archived_inputs = {receipt["id"]: receipt for receipt in receipts["inputs"]}
     for task in tasks:
         if task["status"] not in ("succeeded", "failed", "blocked", "timed_out"):
             raise core.LabError("Unknown archived task status")
         node = next(node for node in plan["graph"] if node["id"] == task["task_id"])
+        if task["status"] == "succeeded" and node["operation"] == "llm:grok":
+            grok.verify_archived(output, node, task["output"], inputs, archived_inputs)
         if task["status"] == "succeeded" and node["operation"] in ("sha256", "reference_sha256", "verify_digest"):
             expected = inputs[node["input_id"]]
             result = task.get("output", {})
