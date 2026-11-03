@@ -64,9 +64,11 @@ def gate_evidence_trigger(semantic, text=None):
     if not refs:
         raise core.LabError("Gate evidence requires a gate that did not pass")
     if text is None:
-        text = " ".join(details)
-    if not isinstance(text, str) or not text.strip() or len(text) > 1000:
+        text = " ".join(details)[:1000]
+    if not isinstance(text, str) or not text.strip():
         raise core.LabError("Revision trigger text is required")
+    if len(text) > 1000:
+        raise core.LabError("Revision trigger text exceeds 1000 characters")
     return {"schema_version": 1, "kind": "gate_evidence", "text": text.strip(),
             "evidence_origin": "observed", "evidence_refs": sorted(refs)}
 

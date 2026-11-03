@@ -342,9 +342,10 @@ def validate_observations(plan, semantic, observations, output):
         raise core.LabError("Malformed execution events") from exc
     if not events or events[0].get("kind") != "run_started" or events[-1].get("kind") != "run_completed":
         raise core.LabError("Incomplete event ledger")
-    active, done, launched, launched_environments = {}, {}, set(), {}
+    active, done, launched, launched_environments, evaluated = {}, {}, set(), {}, set()
     last_time = -1
     allowed = {"run_started", "run_completed", "launched", "completed", "blocked", "launch_failed", "executor_failed", "aborted", "final_identity_failed", "refused", "evaluated"}
+    worker_kinds = {"launched", "completed", "launch_failed", "refused"}
     for index, event in enumerate(events):
         if (not isinstance(event, dict) or type(event.get("sequence")) is not int or event.get("sequence") != index or
                 not isinstance(event.get("kind"), str) or event.get("kind") not in allowed):
@@ -356,6 +357,8 @@ def validate_observations(plan, semantic, observations, output):
         kind, task_id = event["kind"], event.get("task_id")
         if kind in {"launched", "completed", "blocked", "launch_failed", "aborted", "refused", "evaluated"} and (not isinstance(task_id, str) or task_id not in nodes):
             raise core.LabError("Unknown event task")
+        if kind in worker_kinds and nodes[task_id]["operation"] == "gate":
+            raise core.LabError("A gate is evaluated by the controller, not launched")
         if kind == "launched":
             if task_id in launched or any(not _upstream_done(nodes, tasks, done, dep) for dep in nodes[task_id]["depends_on"]):
                 raise core.LabError("Illegal launch transition/dependency")
@@ -379,6 +382,7 @@ def validate_observations(plan, semantic, observations, output):
                     event.get("outcome") != output_row.get("outcome")):
                 raise core.LabError("Illegal gate evaluation")
             done[task_id] = "succeeded"
+            evaluated.add(task_id)
         elif kind in {"blocked", "launch_failed", "aborted", "refused"}:
             if kind == "blocked" and ("gate_ids" in event or "blocked_by" in tasks[task_id]):
                 if event.get("gate_ids") != tasks[task_id].get("blocked_by"):
@@ -398,6 +402,6 @@ def validate_observations(plan, semantic, observations, output):
     if semantic["accepted"] and set(done) != set(nodes):
         raise core.LabError("Accepted execution lacks completion events")
     for task_id, node in nodes.items():
-        if node["operation"] == "gate" and tasks[task_id]["status"] == "succeeded" and done.get(task_id) != "succeeded":
+        if node["operation"] == "gate" and tasks[task_id]["status"] == "succeeded" and task_id not in evaluated:
             raise core.LabError("Gate evaluation event is missing")
     verify_ledger(plan, semantic, observations, events)

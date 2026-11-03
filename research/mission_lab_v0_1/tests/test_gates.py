@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -42,6 +43,16 @@ def _replace_predicate(mission, predicate, **node_edits):
 
 def _task(semantic, task_id):
     return next(task for task in semantic["tasks"] if task["task_id"] == task_id)
+
+
+def _rewrite_events(output, mutate):
+    rows = [json.loads(line) for line in (output / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    rows = mutate(rows)
+    for index, row in enumerate(rows):
+        row["sequence"] = index
+    (output / "events.jsonl").write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8", newline="\n")
+    _reseal(output)
 
 
 def _reseal(output):
@@ -248,6 +259,71 @@ def test_replay_rejects_a_tampered_receipt_and_a_changed_predicate(evidence_dir)
     _reseal(fresh)
     with pytest.raises(core.LabError, match="Gate predicate does not match"):
         report.replay_run(fresh)
+
+
+def test_replay_rejects_a_forged_gate_event_ledger(evidence_dir):
+    plan = planner.build_plan(_mission(), _profile())
+    assert "model_budget" not in plan["resources"]
+
+    def merit_event(rows):
+        return next(row for row in rows if row.get("kind") == "evaluated" and row.get("task_id") == "merit")
+
+    blocked = executor.run_plan_data(plan, evidence_dir / "blocked-event")
+
+    def swap_blocked(rows):
+        row = merit_event(rows)
+        stamp = row["monotonic_ns"]
+        row.clear()
+        row.update({"sequence": 0, "kind": "blocked", "task_id": "merit", "monotonic_ns": stamp})
+        return rows
+
+    _rewrite_events(blocked, swap_blocked)
+    with pytest.raises(core.LabError, match="Gate evaluation event is missing"):
+        report.replay_run(blocked)
+
+    forged = executor.run_plan_data(plan, evidence_dir / "worker-event")
+
+    def swap_worker(rows):
+        index = next(i for i, row in enumerate(rows) if row.get("kind") == "evaluated" and row.get("task_id") == "merit")
+        stamp = rows[index]["monotonic_ns"]
+        launched = {"sequence": 0, "kind": "launched", "task_id": "merit", "monotonic_ns": stamp, "pid": 1,
+                    "reserved_buffer_bytes": 0, "used_buffer_bytes": 0, "workers_active": 1,
+                    "environment_names": ["PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED"]}
+        completed = {"sequence": 0, "kind": "completed", "task_id": "merit", "monotonic_ns": stamp,
+                     "status": "succeeded", "used_buffer_bytes": 0, "workers_active": 0}
+        return rows[:index] + [launched, completed] + rows[index + 1:]
+
+    _rewrite_events(forged, swap_worker)
+    with pytest.raises(core.LabError, match="not launched"):
+        report.replay_run(forged)
+
+    failed = executor.run_plan_data(plan, evidence_dir / "launch-failed-event")
+
+    def swap_launch_failed(rows):
+        row = merit_event(rows)
+        stamp = row["monotonic_ns"]
+        row.clear()
+        row.update({"sequence": 0, "kind": "launch_failed", "task_id": "merit", "monotonic_ns": stamp})
+        return rows
+
+    _rewrite_events(failed, swap_launch_failed)
+    with pytest.raises(core.LabError, match="not launched"):
+        report.replay_run(failed)
+
+
+def test_default_gate_evidence_text_is_truncated():
+    reason = "x" * 200
+    tasks = [{"task_id": f"g{index}", "output": {"outcome": "fail", "reason": reason}} for index in range(8)]
+    joined = " ".join(f"g{index} fail: {reason}" for index in range(8))
+    assert len(joined) > 1000
+    trigger = replan.gate_evidence_trigger({"tasks": tasks})
+    assert trigger["text"] == joined[:1000].strip()
+    assert len(trigger["text"]) <= 1000
+    assert replan.gate_evidence_trigger({"tasks": tasks})["text"] == trigger["text"]
+    with pytest.raises(core.LabError, match="exceeds 1000"):
+        replan.gate_evidence_trigger({"tasks": tasks[:1]}, text="y" * 1001)
+    with pytest.raises(core.LabError, match="Revision trigger text is required"):
+        replan.gate_evidence_trigger({"tasks": tasks[:1]}, text="   ")
 
 
 def test_human_approval_blocks_until_a_resume_copies_an_unauthenticated_record(evidence_dir):
