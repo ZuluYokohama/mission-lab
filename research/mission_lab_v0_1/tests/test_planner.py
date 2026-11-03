@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from research.mission_lab_v0_1 import core, demo, planner, replan
+from research.mission_lab_v0_1 import budget, core, demo, planner, replan
 
 
 SOURCES = {"planner.py": "ab" * 32}
@@ -174,6 +174,7 @@ def test_coordinate_search_matches_enumeration_on_seeded_graphs(tmp_path, monkey
         assert v1["schedule"] == v2["schedule"]
         assert v1["estimated_makespan_ns"] == v2["estimated_makespan_ns"]
         assert v2["enumerated_bindings"] <= v1["enumerated_bindings"]
+        _schedule_respects_resources(v2)
         checked += 1
     assert checked >= 20
     # Whole-file is shorter on the two large inputs and reserves more buffer.
@@ -187,6 +188,7 @@ def test_coordinate_search_matches_enumeration_on_seeded_graphs(tmp_path, monkey
     assert v1["bindings"] == v2["bindings"]
     assert v1["schedule"] == v2["schedule"]
     assert [v2["bindings"][f"hash:i{index}"]["candidate"] for index in range(3)] == ["stream_v1", "stream_v1", "whole_v1"]
+    _schedule_respects_resources(v2)
 
 
 def test_budget_sum_and_exact_boundary_stay_fail_closed(tmp_path, monkeypatch):
@@ -195,6 +197,7 @@ def test_budget_sum_and_exact_boundary_stay_fail_closed(tmp_path, monkeypatch):
     # prompt "ping" is 4 bytes. Each call reserves 4 + 16 tokens and spend 4*3 + 16*15 = 252.
     fitting = _profile(model_budget=_budget(2, 32, 40, spend=504))
     plan = planner.build_plan(mission, fitting, sources=SOURCES)
+    _schedule_respects_resources(plan)
     assert plan["bindings"]["ask0000"]["model_reservation"]["spend"] == 252
     assert plan["bindings"]["ask0001"]["model_reservation"]["spend"] == 252
     for key, value, message in (
@@ -209,6 +212,7 @@ def test_budget_sum_and_exact_boundary_stay_fail_closed(tmp_path, monkeypatch):
     one = _with_llm(_mission(tmp_path / "one", [len(_completion())], fixture_at=0), 1)
     edge = _profile(model_budget=_budget(1, 16, 20, spend=252))
     admitted = planner.build_plan(one, edge, sources=SOURCES)
+    _schedule_respects_resources(admitted)
     assert admitted["bindings"]["ask0000"]["model_reservation"]["output_tokens"] == 16
     edge["model_budget"]["max_output_tokens"] = 15
     with pytest.raises(core.LabError, match="cannot reserve task ask0000"):
@@ -220,8 +224,10 @@ def _schedule_respects_resources(plan):
     by_task = {row["task_id"]: row for row in plan["schedule"]}
     assert set(by_task) == set(nodes)
     for node in plan["graph"]:
+        row = by_task[node["id"]]
+        assert row["end_ns"] - row["start_ns"] == plan["bindings"][node["id"]]["duration_ns"]
         for dep in node["depends_on"]:
-            assert by_task[dep]["end_ns"] <= by_task[node["id"]]["start_ns"]
+            assert by_task[dep]["end_ns"] <= row["start_ns"]
     events = []
     for row in plan["schedule"]:
         events.append((row["start_ns"], 1, row["task_id"]))
@@ -238,6 +244,14 @@ def _schedule_respects_resources(plan):
         assert len(active) <= workers
         reserved = sum(plan["bindings"][task]["buffer_bytes"] for task in active)
         assert reserved <= buffer
+    limits = plan["resources"].get("model_budget")
+    if limits is None:
+        return
+    spent = budget.zero_cost()
+    for row in plan["schedule"]:
+        reservation = plan["bindings"][row["task_id"]]["model_reservation"]
+        spent = budget.add_cost(spent, budget.reservation_numbers(reservation))
+        assert not budget.exceeds(spent, limits)
 
 
 def test_large_graph_plans_within_the_time_bound(tmp_path, monkeypatch):

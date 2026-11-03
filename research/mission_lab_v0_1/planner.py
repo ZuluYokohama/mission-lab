@@ -278,10 +278,12 @@ def _neighborhood(indexes):
 def _coordinate_bindings(graph, choices, resources):
     """Polynomial search over admitted candidates.
 
-    Three seeds, then single-candidate and pairwise changes. A change is kept
-    only when the list-schedule key improves. At most eight improving passes
-    run per seed. Schedule results are reused by candidate-id tuple, so the
-    number of list schedules built is at most the number of distinct tuples
+    Three seeds, then single-candidate and pairwise changes. A seed keeps a
+    change only when it is strictly better than that seed's current key. The
+    recorded plan is the best key among those walks, so a later seed may step
+    through a key that is worse than an earlier seed. At most eight improving
+    passes run per seed. Schedule results are reused by candidate-id tuple, so
+    the number of list schedules built is at most the number of distinct tuples
     visited, which this walk bounds by the seeds, the pass cap, and the
     quadratic neighborhood.
     """
@@ -317,6 +319,7 @@ def _coordinate_bindings(graph, choices, resources):
         if best is None or current[0] < best[0]:
             best = current
         selection = list(seed)
+        current_key = current[0]
         for _pass in range(_MAX_PASSES):
             improved = False
             for group in groups:
@@ -332,10 +335,12 @@ def _coordinate_bindings(graph, choices, resources):
                         if first_error is None:
                             first_error = found
                         continue
-                    if best is None or found[0] < best[0]:
-                        best = found
+                    if found[0] < current_key:
+                        current_key = found[0]
                         selection = trial
                         improved = True
+                        if best is None or found[0] < best[0]:
+                            best = found
                         break
                 if improved:
                     break
