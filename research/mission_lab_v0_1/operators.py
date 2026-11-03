@@ -109,7 +109,10 @@ def execute_operation(job):
         strings(node[key], "worker " + key)
         if len(set(node[key])) != len(node[key]):
             raise LabError("Duplicate worker graph references")
-    fields(job["binding"], ("candidate", "revision", "buffer_bytes", "duration_ns"), label="worker binding")
+    fields(job["binding"], ("candidate", "revision", "buffer_bytes", "duration_ns"), ("model_reservation",), label="worker binding")
+    if "model_reservation" in job["binding"]:
+        from .budget import validate_reservation
+        validate_reservation(job["binding"]["model_reservation"])
     candidate = job["binding"]["candidate"]
     if not isinstance(candidate, str) or job["binding"]["revision"] != REVISIONS.get(candidate):
         raise LabError("Unknown registered implementation revision")

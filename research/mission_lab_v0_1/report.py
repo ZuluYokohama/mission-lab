@@ -5,6 +5,7 @@ from pathlib import Path
 import json
 
 from . import core, grok
+from .budget import verify_ledger, verify_telemetry
 
 
 def counts_for(semantic):
@@ -67,6 +68,37 @@ def render_report(semantic, observations):
             names = observation.get("environment_names")
             rendered = ", ".join(names) if isinstance(names, list) else "—"
             lines.append(f"| {observation['task_id']} | {predicted} | {observation['duration_ns']} | {observation.get('reserved_buffer_bytes', '—')} | {rendered} |")
+    ledger = semantic.get("model_budget") if isinstance(semantic, dict) else None
+    if isinstance(ledger, dict):
+        lines += ["", "## Model budget", "",
+                  f"Fixed-point unit: `{ledger.get('unit')}`. The unit is a profile label. It is not a market rate, an invoice, or an energy measurement.",
+                  "Prices are the integers supplied in the resource profile. Per-million prices use ceiling division by 1,000,000 on each of input and output.",
+                  "A reservation is the worst case from the input-token bound and max_output_tokens. Settlement replaces that hold with provider-reported usage when the usage fits. A launched task that does not settle keeps the hold.",
+                  "",
+                  "| Task | State | Requests reserved | Requests actual | Input reserved | Input actual | Output reserved | Output actual | Total reserved | Total actual | Spend reserved | Spend actual |",
+                  "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+        for row in ledger.get("tasks", []):
+            reserved = row.get("reserved") if isinstance(row.get("reserved"), dict) else {}
+            actual = row.get("actual") if isinstance(row.get("actual"), dict) else {}
+            def shown(source, key):
+                return source[key] if key in source else "—"
+            lines.append(
+                f"| {row.get('task_id')} | {row.get('state')} | {shown(reserved, 'requests')} | {shown(actual, 'requests')} | "
+                f"{shown(reserved, 'input_tokens')} | {shown(actual, 'input_tokens')} | {shown(reserved, 'output_tokens')} | {shown(actual, 'output_tokens')} | "
+                f"{shown(reserved, 'total_tokens')} | {shown(actual, 'total_tokens')} | {shown(reserved, 'spend')} | {shown(actual, 'spend')} |")
+        totals = ledger.get("totals") or {}
+        accounted = totals.get("accounted") or {}
+        remaining = totals.get("remaining") or {}
+        limits = ledger.get("limits") or {}
+        lines += ["",
+                  f"Accounted requests: {accounted.get('requests')} of {limits.get('max_requests')}. Remaining requests: {remaining.get('requests')}.",
+                  f"Accounted spend: {accounted.get('spend')} of {limits.get('max_spend')} `{ledger.get('unit')}`. Remaining spend: {remaining.get('spend')}.",
+                  "Accounted output tokens: " + (str(accounted.get("output_tokens")) + " of " + str(limits.get("max_output_tokens")) + "."
+                                                 if "max_output_tokens" in limits else "not capped."),
+                  "Accounted total tokens: " + (str(accounted.get("total_tokens")) + " of " + str(limits.get("max_total_tokens")) + "."
+                                                if "max_total_tokens" in limits else "not capped."),
+                  "Reserved totals count launched holds before settlement. Actual totals count settled receipts only. Accounted spend is settled usage plus unsettled holds.",
+                  ""]
     lines += ["", "## Limits and alternative explanations", "",
               "Different cache state, process startup, storage contention, and estimate error can explain timing differences.",
               "Matching digests supports the file-audit contract. It establishes no numerical-model, energy-saving, or general software-generation claim.",
@@ -110,7 +142,7 @@ def replay_run(run):
     plan = core.load_plan(output / "plan.json")
     semantic = core.read_json(output / "semantic.json")
     observations = core.read_json(output / "observations.json")
-    core.fields(semantic, ("schema_version", "plan_id", "mission_id", "accepted", "profile", "tasks"), label="semantic record")
+    core.fields(semantic, ("schema_version", "plan_id", "mission_id", "accepted", "profile", "tasks"), ("model_budget",), label="semantic record")
     if type(semantic["schema_version"]) is not int or semantic["schema_version"] != 1:
         raise core.LabError("Unsupported semantic schema")
     if semantic["profile"] != {"estimate_origin": plan["resources"]["estimate_origin"], "resources": plan["resources"],
@@ -122,7 +154,7 @@ def replay_run(run):
     if not isinstance(tasks, list):
         raise core.LabError("Malformed task evidence")
     for task in tasks:
-        core.fields(task, ("task_id", "status", "output", "error"), label="archived task")
+        core.fields(task, ("task_id", "status", "output", "error"), ("model_account",), label="archived task")
         core.identifier(task["task_id"])
         if not isinstance(task["status"], str):
             raise core.LabError("Malformed task status")
@@ -184,6 +216,7 @@ def replay_run(run):
     elif (output / "manifest.json").exists():
         raise core.LabError("Rejected execution cannot promote a manifest")
     validate_observations(plan, semantic, observations, output)
+    verify_telemetry(plan, semantic, validation)
     regenerated = render_report(semantic, observations)
     if (output / "report.md").read_text(encoding="utf-8") != regenerated:
         raise core.LabError("Report does not match deterministic regeneration")
@@ -200,7 +233,7 @@ def validate_observations(plan, semantic, observations, output):
     observed = set()
     for row in observations:
         core.fields(row, ("task_id", "started_ns", "finished_ns", "duration_ns", "pid", "exit_code", "reserved_buffer_bytes", "status", "command",
-                          "process_creation_started_ns", "process_creation_ns", "environment_names"), label="observation")
+                          "process_creation_started_ns", "process_creation_ns", "environment_names"), ("model_account",), label="observation")
         if not isinstance(row["task_id"], str) or row["task_id"] not in nodes or row["task_id"] in observed:
             raise core.LabError("Invalid observation task identity")
         observed.add(row["task_id"])
@@ -227,7 +260,7 @@ def validate_observations(plan, semantic, observations, output):
         raise core.LabError("Incomplete event ledger")
     active, done, launched, launched_environments = {}, {}, set(), {}
     last_time = -1
-    allowed = {"run_started", "run_completed", "launched", "completed", "blocked", "launch_failed", "executor_failed", "aborted", "final_identity_failed"}
+    allowed = {"run_started", "run_completed", "launched", "completed", "blocked", "launch_failed", "executor_failed", "aborted", "final_identity_failed", "refused"}
     for index, event in enumerate(events):
         if (not isinstance(event, dict) or type(event.get("sequence")) is not int or event.get("sequence") != index or
                 not isinstance(event.get("kind"), str) or event.get("kind") not in allowed):
@@ -237,7 +270,7 @@ def validate_observations(plan, semantic, observations, output):
             raise core.LabError("Invalid event time ordering")
         last_time = stamp
         kind, task_id = event["kind"], event.get("task_id")
-        if kind in {"launched", "completed", "blocked", "launch_failed", "aborted"} and (not isinstance(task_id, str) or task_id not in nodes):
+        if kind in {"launched", "completed", "blocked", "launch_failed", "aborted", "refused"} and (not isinstance(task_id, str) or task_id not in nodes):
             raise core.LabError("Unknown event task")
         if kind == "launched":
             if task_id in launched or any(done.get(dep) != "succeeded" for dep in nodes[task_id]["depends_on"]):
@@ -254,7 +287,7 @@ def validate_observations(plan, semantic, observations, output):
                 raise core.LabError("Illegal completion transition")
             active.pop(task_id)
             done[task_id] = event["status"]
-        elif kind in {"blocked", "launch_failed", "aborted"}:
+        elif kind in {"blocked", "launch_failed", "aborted", "refused"}:
             active.pop(task_id, None)
             done[task_id] = tasks[task_id]["status"]
         if kind in {"launched", "completed"}:
@@ -269,3 +302,4 @@ def validate_observations(plan, semantic, observations, output):
         raise core.LabError("Terminal event contradicts execution status")
     if semantic["accepted"] and set(done) != set(nodes):
         raise core.LabError("Accepted execution lacks completion events")
+    verify_ledger(plan, semantic, observations, events)

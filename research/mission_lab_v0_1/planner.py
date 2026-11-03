@@ -6,6 +6,7 @@ import copy
 from pathlib import Path
 
 from . import core
+from .budget import add_cost, exceeds, reservation_for, reservation_numbers, zero_cost
 from .operators import required_buffer
 
 
@@ -32,7 +33,7 @@ def compile_graph(mission):
     return sorted(graph, key=lambda node: node["id"])
 
 
-def binding(node, candidate, inputs, costs):
+def binding(node, candidate, inputs, costs, resources):
     size = inputs[node["input_id"]]["size_bytes"] if "input_id" in node else 0
     if candidate == "whole_v1":
         duration = costs["fixed_task_ns"] + size * costs["whole_ns_per_byte"]
@@ -46,7 +47,11 @@ def binding(node, candidate, inputs, costs):
         raise core.LabError("Unknown registered candidate")
     buffer = required_buffer(node["operation"], candidate, inputs.get(node.get("input_id")), node=node, inputs=inputs)
     core.integer(duration, 1, 2**63 - 1, "estimated task duration_ns")
-    return {"candidate": candidate, "revision": core.REVISIONS[candidate], "buffer_bytes": buffer, "duration_ns": duration}
+    record = {"candidate": candidate, "revision": core.REVISIONS[candidate], "buffer_bytes": buffer, "duration_ns": duration}
+    reservation = reservation_for(node, inputs, resources)
+    if reservation is not None:
+        record["model_reservation"] = reservation
+    return record
 
 
 def critical_path_lengths(graph, bindings):
@@ -69,16 +74,30 @@ def construct_schedule(graph, bindings, resources):
     tails = critical_path_lengths(graph, bindings)
     nodes = {node["id"]: node for node in graph}
     pending, completed, active, schedule = set(nodes), set(), [], []
+    limits = resources.get("model_budget")
+    spent = zero_cost()
+
+    def budget_ok(task_id):
+        if limits is None:
+            return True
+        projected = add_cost(spent, reservation_numbers(bindings[task_id]["model_reservation"]))
+        return not exceeds(projected, limits)
+
     now = 0
     while pending or active:
         while len(active) < resources["workers"]:
             reserved = sum(bindings[nid]["buffer_bytes"] for _, nid in active)
             ready = sorted((nid for nid in pending if set(nodes[nid]["depends_on"]) <= completed),
                            key=lambda nid: (-tails[nid], nid))
-            feasible = [nid for nid in ready if reserved + bindings[nid]["buffer_bytes"] <= resources["read_buffer_bytes"]]
+            feasible = [nid for nid in ready
+                        if reserved + bindings[nid]["buffer_bytes"] <= resources["read_buffer_bytes"] and budget_ok(nid)]
             if not feasible:
+                if limits is not None and ready and not any(budget_ok(nid) for nid in ready):
+                    raise core.LabError("No feasible schedule under the declared model budget")
                 break
             nid = feasible[0]
+            if limits is not None:
+                spent = add_cost(spent, reservation_numbers(bindings[nid]["model_reservation"]))
             end = now + bindings[nid]["duration_ns"]
             schedule.append({"task_id": nid, "start_ns": now, "end_ns": end})
             active.append((end, nid))
@@ -116,10 +135,16 @@ def build_plan(mission, resources, *, sources=None, check_files=True):
                "verify_digest": ("compare_v1",), "assemble_manifest": ("manifest_v1",),
                "llm:grok": ("chat_v1",)}
     for node in graph:
-        candidates = [binding(node, candidate, inputs, resources["cost_model"]) for candidate in options[node["operation"]]]
+        candidates = [binding(node, candidate, inputs, resources["cost_model"], resources) for candidate in options[node["operation"]]]
         candidates = [candidate for candidate in candidates if candidate["buffer_bytes"] <= resources["read_buffer_bytes"]]
         if not candidates:
             raise core.LabError("No supported candidate fits task " + node["id"])
+        if "model_budget" in resources:
+            affordable = [candidate for candidate in candidates
+                          if not exceeds(reservation_numbers(candidate["model_reservation"]), resources["model_budget"])]
+            if not affordable:
+                raise core.LabError("Model budget cannot reserve task " + node["id"])
+            candidates = affordable
         choices.append(candidates)
     best = None
     enumerated = 0
@@ -134,7 +159,8 @@ def build_plan(mission, resources, *, sources=None, check_files=True):
     obligations = [{"task_id": node["id"], "requirement_ids": [r["id"] for r in mission["requirements"]],
                     "checks": ["registered operation and revision", "declared resource reservations", "dependency and ownership"],
                     "requirement_semantics": "prose retained for human alignment; not automatically assessed",
-                    "functional_check": ("recorded request and response hashes, HTTP status, reported token usage, and content artifact; no model-quality claim"
+                    "functional_check": ("recorded request and response hashes, HTTP status, reported token usage, and content artifact; "
+                                         "a declared model budget settles its reservation against that usage; no model-quality claim"
                                          if node["operation"] == "llm:grok" else
                                          "exact hash and byte count against declared input and sequential reference")}
                    for node in graph]
