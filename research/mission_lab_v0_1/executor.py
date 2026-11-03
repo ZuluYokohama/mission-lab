@@ -310,14 +310,18 @@ def run_plan_data(plan, out):
                     if task_id in running:
                         del running[task_id]
                         used_buffer -= binding["buffer_bytes"]
-                    released = task_id in inflight
-                    if released:
-                        del inflight[task_id]
+                    # A process that exists, or a hold already recorded, stays charged
+                    # at the worst case. A failure before Popen never took the hold.
+                    if limits is not None and (child is not None or task_id in inflight):
+                        held = inflight.pop(task_id) if task_id in inflight else reservation_numbers(binding["model_reservation"])
+                        accounted = add_cost(accounted, held)
+                        state = "charged"
+                    else:
+                        state = "unlaunched"
                     if child is not None:
                         if child.poll() is None:
                             child.kill()
                         child.wait()
-                    state = "released" if released else "unlaunched"
                     results[task_id] = with_account(task_id, _failure(task_id, error), state)
                     write_json(directory / ("result_" + str(index) + ".json"), results[task_id])
                     failed_fields = {"error": results[task_id]["error"]}

@@ -430,12 +430,20 @@ def verify_ledger(plan, semantic, observations, events):
             terminal = "refused"
         elif kind == "launch_failed":
             _require_account_fields(event, "model_state", "model_accounted")
+            state = event["model_state"]
             if task_id in inflight:
-                inflight.pop(task_id)
-                terminal = "released"
+                # A recorded launch means the process existed. The hold stays charged.
+                held = inflight.pop(task_id)
+                if state == "charged":
+                    accounted = add_cost(accounted, held)
+                terminal = "charged"
+            elif state == "charged":
+                # The process existed, but the launch line was not archived.
+                accounted = add_cost(accounted, reservation_numbers(by_task[task_id]["reserved"]))
+                terminal = "charged"
             else:
                 terminal = "unlaunched"
-            if event["model_state"] != terminal:
+            if state != terminal:
                 raise LabError("Launch failure model state contradicts the reservation")
         elif kind == "aborted":
             _require_account_fields(event, "model_state", "model_accounted")

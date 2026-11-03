@@ -404,5 +404,75 @@ def test_scheduler_refuses_a_launch_that_would_exceed_the_remaining_budget(evide
     assert ledger["limits"]["max_requests"] == 1
     assert ledger["totals"]["remaining"]["requests"] == 0
     monkeypatch.undo()
-    with pytest.raises(core.LabError):
+    with pytest.raises(core.LabError, match="declared model budget"):
         report.replay_run(output)
+
+
+def test_launch_failure_after_the_process_exists_keeps_the_worst_case_hold(evidence_dir, monkeypatch):
+    payload = _completion()
+    mission = _with_asks(_mission(evidence_dir / "reply.json", payload))
+    plan = planner.build_plan(mission, _profile(model_budget=_budget(max_spend=252, max_requests=1, max_output_tokens=16, max_total_tokens=20)))
+    real_start = executor.threading.Thread.start
+
+    def start(self):
+        task_id = self._args[0] if self._args else None
+        if task_id == "ask":
+            raise RuntimeError("watcher failed after launch")
+        return real_start(self)
+
+    monkeypatch.setattr(executor.threading.Thread, "start", start)
+    output = executor.run_plan_data(plan, evidence_dir / "charged-launch")
+    semantic = core.read_json(output / "semantic.json")
+    assert semantic["accepted"] is False
+    ask = next(task for task in semantic["tasks"] if task["task_id"] == "ask")
+    assert ask["status"] == "failed"
+    assert ask["model_account"]["state"] == "charged"
+    assert ask["model_account"]["actual"] is None
+    assert ask["model_account"]["reserved"]["spend"] == 252
+    ledger = semantic["model_budget"]
+    assert ledger["totals"]["reserved"]["spend"] == 252
+    assert ledger["totals"]["actual"]["spend"] == 0
+    assert ledger["totals"]["accounted"]["spend"] == 252
+    assert ledger["totals"]["remaining"]["spend"] == 0
+    rows = [json.loads(line) for line in (output / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    launched = next(row for row in rows if row["kind"] == "launched" and row["task_id"] == "ask")
+    failed = next(row for row in rows if row["kind"] == "launch_failed" and row["task_id"] == "ask")
+    assert failed["model_state"] == "charged"
+    assert failed["model_accounted"] == launched["model_accounted"]
+    assert report.replay_run(output)["accepted"] is False
+    failed["model_state"] = "released"
+    (output / "events.jsonl").write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8", newline="\n")
+    _reseal(output)
+    with pytest.raises(core.LabError, match="Launch failure model state"):
+        report.replay_run(output)
+
+
+def test_launch_failure_before_the_process_exists_does_not_charge(evidence_dir, monkeypatch):
+    payload = _completion()
+    mission = _with_asks(_mission(evidence_dir / "reply.json", payload))
+    plan = planner.build_plan(mission, _profile(model_budget=_budget()))
+    real_popen = executor.subprocess.Popen
+
+    def popen(command, **kwargs):
+        job = core.read_json(command[command.index("--job") + 1])
+        if job["node"]["id"] == "ask":
+            raise OSError("process was not created")
+        return real_popen(command, **kwargs)
+
+    monkeypatch.setattr(executor.subprocess, "Popen", popen)
+    output = executor.run_plan_data(plan, evidence_dir / "unlaunched")
+    semantic = core.read_json(output / "semantic.json")
+    assert semantic["accepted"] is False
+    ask = next(task for task in semantic["tasks"] if task["task_id"] == "ask")
+    assert ask["status"] == "failed"
+    assert ask["model_account"]["state"] == "unlaunched"
+    assert ask["model_account"]["actual"] is None
+    assert "process was not created" in ask["error"]["message"]
+    ledger = semantic["model_budget"]
+    assert ledger["totals"]["accounted"]["spend"] == 0
+    assert ledger["totals"]["reserved"]["spend"] == 0
+    rows = [json.loads(line) for line in (output / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert not any(row["kind"] == "launched" and row["task_id"] == "ask" for row in rows)
+    failed = next(row for row in rows if row["kind"] == "launch_failed" and row["task_id"] == "ask")
+    assert failed["model_state"] == "unlaunched"
+    assert report.replay_run(output)["accepted"] is False
