@@ -608,3 +608,29 @@ def test_approver_configuration_raises_before_evaluation_and_replay_names_the_ke
     monkeypatch.delenv("MISSION_LAB_APPROVER_KEY")
     with pytest.raises(core.LabError, match="approver key is not available: " + fingerprint):
         report.replay_run(passed)
+
+
+def test_nested_signed_approval_names_a_missing_key_on_replay(evidence_dir, monkeypatch):
+    material = b"approver-key-" + b"bytes!!"
+    fingerprint = seal.key_id(material)
+    monkeypatch.setenv("MISSION_LAB_APPROVER_KEY", material.decode())
+    mission = _approval_mission([fingerprint])
+    merit = next(node for node in mission["tasks"] if node["id"] == "gate:merit")
+    merit["predicate"] = {"kind": "all", "predicates": [
+        {"kind": "any", "predicates": [merit["predicate"]]}]}
+    plan = planner.build_plan(mission, _profile(workers=2, read_buffer_bytes=4 * 1024 * 1024, timeout_seconds=30))
+    pending = executor.run_plan_data(plan, evidence_dir / "nested-pending")
+    signed = seal.sign_approval(_unsigned_record(), material)
+    passed = executor.resume_run(pending, evidence_dir / "nested-passed", signed)
+    assert _task(core.read_json(passed / "semantic.json"), "gate:merit")["output"]["outcome"] == "pass"
+    monkeypatch.delenv("MISSION_LAB_APPROVER_KEY")
+    archived = core.load_plan(passed / "plan.json")
+    gate = next(node for node in archived["graph"] if node["id"] == "gate:merit")
+    semantic = core.read_json(passed / "semantic.json")
+    observations = core.read_json(passed / "observations.json")
+    receipt = gates.evaluate(gate, gates.evidence_from(semantic["tasks"], observations, passed))
+    assert receipt["outcome"] == "pending"
+    assert receipt["reason"].startswith("child predicate is pending:")
+    assert not receipt["reason"].startswith("approver key is not available")
+    with pytest.raises(core.LabError, match="approver key is not available: " + fingerprint):
+        report.replay_run(passed)

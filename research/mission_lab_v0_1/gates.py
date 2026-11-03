@@ -184,8 +184,13 @@ def evaluate(node, evidence):
         "approvals": evidence.get("approvals") if isinstance(evidence.get("approvals"), dict) else {},
         "approval_status": evidence.get("approval_status", "absent"),
     }
+    return _evaluate(node, evidence)[0]
+
+
+def _evaluate(node, evidence):
+    """Return the receipt and the approver key ids that were required but not loaded."""
     predicate = node["predicate"]
-    outcome, reason = _eval(predicate, evidence, node["id"])
+    outcome, reason, missing = _eval(predicate, evidence, node["id"])
     if outcome not in OUTCOMES:
         raise LabError("Gate outcome is unknown")
     receipt = {
@@ -195,7 +200,7 @@ def evaluate(node, evidence):
         "reason": _reason(reason),
         "predicate_sha256": digest_object(predicate),
     }
-    return _check_receipt(receipt)
+    return _check_receipt(receipt), missing
 
 
 def prepare_approver_keys(graph):
@@ -250,11 +255,11 @@ def reevaluate_archived(plan, tasks, observations, run):
         output = task.get("output")
         if not isinstance(output, dict) or output.get("predicate_sha256") != digest_object(node["predicate"]):
             raise LabError("Gate predicate does not match the receipt")
-        receipt = evaluate(node, evidence)
+        receipt, missing = _evaluate(node, evidence)
         if output != receipt:
-            reason = receipt.get("reason") if isinstance(receipt, dict) else None
-            if receipt.get("outcome") == "pending" and isinstance(reason, str) and reason.startswith("approver key is not available"):
-                raise LabError("Gate receipt does not match the archived evidence: " + reason)
+            if receipt.get("outcome") == "pending" and missing:
+                raise LabError("Gate receipt does not match the archived evidence: approver key is not available: "
+                               + ", ".join(sorted(missing)))
             raise LabError("Gate receipt does not match the archived evidence")
     return True
 
@@ -382,20 +387,23 @@ def _collect_approver(predicate, found):
 
 
 def _eval(predicate, evidence, gate_id):
+    """Return outcome, reason, and approver key ids that were required but not loaded."""
     kind = predicate["kind"]
-    if kind == "digest_equal":
-        return _digest_equal(predicate, evidence)
-    if kind == "llm_field":
-        return _llm_field(predicate, evidence)
-    if kind == "numeric_bounds":
-        return _numeric(predicate, evidence)
     if kind == "all":
         return _compose(predicate["predicates"], evidence, gate_id, empty_pass=True)
     if kind == "any":
         return _compose(predicate["predicates"], evidence, gate_id, empty_pass=False)
     if kind == "human_approval":
         return _approval(predicate, evidence, gate_id)
-    raise LabError("Unknown gate predicate")
+    if kind == "digest_equal":
+        outcome, reason = _digest_equal(predicate, evidence)
+    elif kind == "llm_field":
+        outcome, reason = _llm_field(predicate, evidence)
+    elif kind == "numeric_bounds":
+        outcome, reason = _numeric(predicate, evidence)
+    else:
+        raise LabError("Unknown gate predicate")
+    return outcome, reason, frozenset()
 
 
 def _digest_equal(predicate, evidence):
@@ -479,26 +487,35 @@ def _numeric_value(field, node_id, evidence):
 def _compose(children, evidence, gate_id, *, empty_pass):
     results = [_eval(child, evidence, gate_id) for child in children]
     if empty_pass:
-        for outcome, reason in results:
-            if outcome == "fail":
-                return "fail", _reason("child predicate failed: " + reason)
-        for outcome, reason in results:
-            if outcome == "indeterminate":
-                return "indeterminate", _reason("child predicate is indeterminate: " + reason)
-        for outcome, reason in results:
-            if outcome == "pending":
-                return "pending", _reason("child predicate is pending: " + reason)
-        return "pass", "all child predicates passed"
-    for outcome, reason in results:
-        if outcome == "pass":
-            return "pass", "a child predicate passed"
-    for outcome, reason in results:
-        if outcome == "indeterminate":
-            return "indeterminate", _reason("child predicate is indeterminate: " + reason)
-    for outcome, reason in results:
-        if outcome == "pending":
-            return "pending", _reason("child predicate is pending: " + reason)
-    return "fail", "no child predicate passed"
+        selected = _selected(results, "fail")
+        if selected:
+            return "fail", _reason("child predicate failed: " + selected[0]), selected[1]
+        selected = _selected(results, "indeterminate")
+        if selected:
+            return "indeterminate", _reason("child predicate is indeterminate: " + selected[0]), selected[1]
+        selected = _selected(results, "pending")
+        if selected:
+            return "pending", _reason("child predicate is pending: " + selected[0]), selected[1]
+        return "pass", "all child predicates passed", frozenset()
+    selected = _selected(results, "pass")
+    if selected:
+        return "pass", "a child predicate passed", frozenset()
+    selected = _selected(results, "indeterminate")
+    if selected:
+        return "indeterminate", _reason("child predicate is indeterminate: " + selected[0]), selected[1]
+    selected = _selected(results, "pending")
+    if selected:
+        return "pending", _reason("child predicate is pending: " + selected[0]), selected[1]
+    return "fail", "no child predicate passed", frozenset()
+
+
+def _selected(results, outcome):
+    """First matching reason, plus every missing approver key id among matches."""
+    chosen = [item for item in results if item[0] == outcome]
+    if not chosen:
+        return None
+    missing = frozenset().union(*(item[2] for item in chosen))
+    return chosen[0][1], missing
 
 
 def _approver_key_ids(value):
@@ -516,38 +533,38 @@ def _approver_key_ids(value):
 
 def _approval(predicate, evidence, gate_id):
     if evidence.get("approval_status") == "malformed":
-        return "indeterminate", "approval record is malformed; the record is not authenticated"
+        return "indeterminate", "approval record is malformed; the record is not authenticated", frozenset()
     record = evidence.get("approvals", {}).get(gate_id)
     required = predicate.get("approver_key_ids")
     if not required:
         if not isinstance(record, dict):
-            return "pending", "approval record is absent; the record is not authenticated"
+            return "pending", "approval record is absent; the record is not authenticated", frozenset()
         if record.get("gate_id") != gate_id or record.get("approver_id") != predicate["approver_id"]:
-            return "fail", "approval record does not match the declared approver; the record is not authenticated"
-        return "pass", "approval record matches the declared approver; the record is not authenticated"
+            return "fail", "approval record does not match the declared approver; the record is not authenticated", frozenset()
+        return "pass", "approval record matches the declared approver; the record is not authenticated", frozenset()
     if not isinstance(record, dict):
-        return "pending", "approval record is absent"
+        return "pending", "approval record is absent", frozenset()
     if record.get("gate_id") != gate_id or record.get("approver_id") != predicate["approver_id"]:
-        return "fail", "approval record does not match the declared approver"
+        return "fail", "approval record does not match the declared approver", frozenset()
     return _signed_approval(record, required)
 
 
 def _signed_approval(record, required):
     signature = record.get("signature")
     if not isinstance(signature, dict):
-        return "pending", "approval signature is absent"
+        return "pending", "approval signature is absent", frozenset()
     if signature.get("algorithm") != "hmac-sha256":
-        return "pending", "approval signature algorithm is not hmac-sha256"
+        return "pending", "approval signature algorithm is not hmac-sha256", frozenset()
     signed_id = signature.get("key_id")
     if not isinstance(signed_id, str) or signed_id not in required:
-        return "pending", "approval signature key is not a declared approver key"
+        return "pending", "approval signature key is not a declared approver key", frozenset()
     from .seal import approval_mac_matches, load_approver_keys
     key = load_approver_keys().get(signed_id)
     if key is None:
-        return "pending", "approver key is not available: " + signed_id
+        return "pending", "approver key is not available: " + signed_id, frozenset((signed_id,))
     if not approval_mac_matches(record, key):
-        return "pending", "approval signature is not valid"
-    return "pass", "approval signature matches approver key " + signed_id
+        return "pending", "approval signature is not valid", frozenset()
+    return "pass", "approval signature matches approver key " + signed_id, frozenset()
 
 
 def _reason(text):
