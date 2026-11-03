@@ -4,14 +4,19 @@ flowchart TD
     O --> K[Orient: explicit knowledge, uncertainty, cost origin]
     K --> D[Decide: coordinate-list-v2 list schedule, at most 2048 nodes]
     D --> P[Fresh plan, planner stamp, and input hashes]
-    P --> X[Act: registered operators in own Python worker]
+    P --> X[Act: file and chat operators in a Python worker]
     X --> E[Observed outputs, timings, reservations, failures]
-    E --> G[Verify digest agreement and goal predicates]
+    E --> G[Verify digest agreement]
     G --> M[Assemble result manifest and evidence chain]
-    E --> R[Replan with new resource revision]
+    E --> W[Merit gate: closed predicate in the controller]
+    W -->|pass| N[Downstream nodes may launch]
+    W -->|fail, indeterminate, or pending| Z[Downstream blocked; model budget not charged]
+    Z --> R[Replan; gate evidence can tighten a bound or swap a candidate]
+    E --> R
     R --> D
-    M --> Q[Offline evidence replay]
+    M --> Q[Offline replay re-evaluates each gate from archived receipts]
     U[Package fixtures] --> I[Metadata-only bounded inventory]
     I --> O
     X -. worker, read-buffer, and model-budget reservations .-> B[Controller checks]
     B --> G
+    W -. no worker, no buffer, no model reservation .-> B

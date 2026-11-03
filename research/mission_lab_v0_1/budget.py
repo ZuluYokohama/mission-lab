@@ -19,7 +19,7 @@ from .core import LabError, fields, integer
 
 COST_KEYS = ("requests", "input_tokens", "output_tokens", "total_tokens", "spend")
 ACCOUNT_STATES = ("settled", "charged", "released", "refused", "unlaunched")
-TERMINAL_KINDS = ("completed", "refused", "launch_failed", "blocked", "aborted")
+TERMINAL_KINDS = ("completed", "refused", "launch_failed", "blocked", "aborted", "evaluated")
 MILLION = 1_000_000
 MAX_PRICE = 10**12
 MAX_SPEND = 10**18
@@ -338,9 +338,14 @@ def verify_ledger(plan, semantic, observations, events):
     inputs = {item["id"]: item for item in plan["mission"]["inputs"]}
     nodes = {node["id"]: node for node in plan["graph"]}
     by_task = {}
+    status_of = {}
+    outcome_of = {}
     for task in tasks:
         if not isinstance(task, dict) or task.get("task_id") not in nodes:
             raise LabError("Model budget task identity is missing")
+        status_of[task["task_id"]] = task.get("status")
+        output = task.get("output")
+        outcome_of[task["task_id"]] = output.get("outcome") if isinstance(output, dict) else None
         account = task.get("model_account")
         if not isinstance(account, dict):
             raise LabError("Model account is missing")
@@ -362,7 +367,8 @@ def verify_ledger(plan, semantic, observations, events):
         elif account["state"] == "charged" and task.get("status") == "succeeded":
             raise LabError("Charged model reservation was recorded as success")
         elif account["state"] in ("refused", "unlaunched", "released") and task.get("status") == "succeeded":
-            raise LabError("Unsettled model reservation was recorded as success")
+            if nodes[task["task_id"]].get("operation") != "gate" or account["state"] != "unlaunched":
+                raise LabError("Unsettled model reservation was recorded as success")
         by_task[task["task_id"]] = account
     if set(by_task) != set(nodes):
         raise LabError("Model budget ledger is missing a task")
@@ -458,6 +464,12 @@ def verify_ledger(plan, semantic, observations, events):
             _require_account_fields(event, "model_state", "model_accounted")
             if task_id in inflight or event["model_state"] != "unlaunched":
                 raise LabError("Blocked model reservation contradicts the ledger")
+            if kind == "evaluated":
+                if (nodes[task_id].get("operation") != "gate" or status_of.get(task_id) != "succeeded" or
+                        outcome_of.get(task_id) is None or event.get("outcome") != outcome_of.get(task_id)):
+                    raise LabError("Gate evaluation event does not match the task")
+            elif status_of.get(task_id) == "succeeded":
+                raise LabError("Succeeded task was closed without settlement")
             terminal = "unlaunched"
         if task_id in final:
             raise LabError("Repeated model budget terminal state")

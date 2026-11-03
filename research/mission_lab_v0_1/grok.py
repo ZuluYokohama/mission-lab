@@ -101,7 +101,9 @@ def validate_llm_wiring(node, nodes, inputs):
         if not 1 <= artifact["size_bytes"] <= node["max_response_bytes"]:
             raise LabError("Grok fixture exceeds max_response_bytes")
         needed.append(_verify_id(nodes, node["fixture_id"], "fixture"))
-    if sorted(node["depends_on"]) != sorted(needed):
+    declared = set(node["depends_on"])
+    needed_set = set(needed)
+    if not needed_set <= declared or any(nodes[dep]["operation"] != "gate" for dep in declared - needed_set):
         raise LabError("llm:grok dependencies must be the verifications of its prompt and fixture files")
 
 

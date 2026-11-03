@@ -42,6 +42,7 @@ _OPTIONS = {
     "verify_digest": ("compare_v1",),
     "assemble_manifest": ("manifest_v1",),
     "llm:grok": ("chat_v1",),
+    "gate": ("predicate_v1",),
 }
 _PLAN_FIELDS = (
     "schema_version", "mission", "mission_identity", "graph", "resources", "bindings", "schedule",
@@ -81,7 +82,7 @@ def binding(node, candidate, inputs, costs, resources):
         duration = costs["fixed_task_ns"] + size * costs["stream_ns_per_byte"]
     elif candidate == "reference_v1":
         duration = costs["fixed_task_ns"] + size * costs["reference_ns_per_byte"]
-    elif candidate in ("compare_v1", "manifest_v1", "chat_v1"):
+    elif candidate in ("compare_v1", "manifest_v1", "chat_v1", "predicate_v1"):
         duration = costs["fixed_task_ns"]
     else:
         raise core.LabError("Unknown registered candidate")
@@ -353,14 +354,21 @@ def _coordinate_bindings(graph, choices, resources):
     return best, evaluated
 
 
+def _functional_check(operation):
+    if operation == "llm:grok":
+        return ("recorded request and response hashes, HTTP status, reported token usage, and content artifact; "
+                "a declared model budget settles its reservation against that usage; no model-quality claim")
+    if operation == "gate":
+        return ("declared predicate over dependency receipts; outcome is pass, fail, indeterminate, or pending; "
+                "no arbitrary code and no model-quality claim")
+    return "exact hash and byte count against declared input and sequential reference"
+
+
 def _obligations(mission, graph):
     return [{"task_id": node["id"], "requirement_ids": [requirement["id"] for requirement in mission["requirements"]],
              "checks": ["registered operation and revision", "declared resource reservations", "dependency and ownership"],
              "requirement_semantics": "prose retained for human alignment; not automatically assessed",
-             "functional_check": ("recorded request and response hashes, HTTP status, reported token usage, and content artifact; "
-                                  "a declared model budget settles its reservation against that usage; no model-quality claim"
-                                  if node["operation"] == "llm:grok" else
-                                  "exact hash and byte count against declared input and sequential reference")}
+             "functional_check": _functional_check(node["operation"])}
             for node in graph]
 
 

@@ -13,6 +13,7 @@ REGISTRY = {
     "verify_digest": {"compare_v1"},
     "assemble_manifest": {"manifest_v1"},
     "llm:grok": {"chat_v1"},
+    "gate": {"predicate_v1"},
 }
 
 
@@ -22,7 +23,7 @@ def required_buffer(operation, candidate, artifact=None, *, node=None, inputs=No
     if operation == "llm:grok":
         from .grok import read_reservation
         return read_reservation(node, inputs if inputs is not None else {})
-    if operation in {"verify_digest", "assemble_manifest"}:
+    if operation in {"verify_digest", "assemble_manifest", "gate"}:
         return 0
     if not isinstance(artifact, dict) or type(artifact.get("size_bytes")) is not int:
         raise LabError("Digest operator requires a sized input artifact")
@@ -145,6 +146,8 @@ def execute_operation(job):
             raise LabError("Operator requires successful dependencies")
     if operation != "llm:grok" and ("fixture" in job or "captures" in job):
         raise LabError("Only llm:grok jobs may carry fixture inputs or capture paths")
+    if operation == "gate":
+        raise LabError("A gate is evaluated by the controller")
     if operation == "llm:grok":
         from .grok import execute as execute_grok
         return execute_grok(job)

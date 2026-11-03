@@ -7,8 +7,10 @@ def validate_trigger(trigger):
     core.fields(trigger, ("schema_version", "kind", "text", "evidence_origin"), ("evidence_refs",), "revision trigger")
     if type(trigger["schema_version"]) is not int or trigger["schema_version"] != 1:
         raise core.LabError("Unsupported trigger schema")
-    if trigger["kind"] not in ("resource_change", "requirement_change"):
+    if trigger["kind"] not in ("resource_change", "requirement_change", "gate_evidence"):
         raise core.LabError("Unsupported revision trigger")
+    if trigger["kind"] == "gate_evidence" and not trigger.get("evidence_refs"):
+        raise core.LabError("Gate evidence requires evidence_refs")
     if trigger["evidence_origin"] not in ("injected_demo", "observed", "human_supplied"):
         raise core.LabError("Trigger origin is required")
     if not isinstance(trigger["text"], str) or not trigger["text"].strip():
@@ -44,6 +46,33 @@ def validate_revision(revision, graph):
     return revision
 
 
+def gate_evidence_trigger(semantic, text=None):
+    """Build a revision trigger from gate receipts that did not pass.
+
+    The text is evidence for a later plan. It does not change the prior run.
+    """
+    if not isinstance(semantic, dict) or not isinstance(semantic.get("tasks"), list):
+        raise core.LabError("Gate evidence requires task receipts")
+    refs, details = [], []
+    for task in semantic["tasks"]:
+        output = task.get("output") if isinstance(task, dict) else None
+        if not isinstance(output, dict) or output.get("outcome") not in ("fail", "indeterminate", "pending"):
+            continue
+        refs.append(task["task_id"])
+        reason = output.get("reason") if isinstance(output.get("reason"), str) else ""
+        details.append(task["task_id"] + " " + output["outcome"] + ": " + reason)
+    if not refs:
+        raise core.LabError("Gate evidence requires a gate that did not pass")
+    if text is None:
+        text = " ".join(details)[:1000]
+    if not isinstance(text, str) or not text.strip():
+        raise core.LabError("Revision trigger text is required")
+    if len(text) > 1000:
+        raise core.LabError("Revision trigger text exceeds 1000 characters")
+    return {"schema_version": 1, "kind": "gate_evidence", "text": text.strip(),
+            "evidence_origin": "observed", "evidence_refs": sorted(refs)}
+
+
 def replan_data(prior, resources, trigger, *, mission=None):
     validate_plan_record(prior)
     validate_trigger(trigger)
@@ -51,6 +80,11 @@ def replan_data(prior, resources, trigger, *, mission=None):
         raise core.LabError("A resource revision cannot change requirements")
     if trigger["kind"] == "requirement_change" and mission is None:
         raise core.LabError("Requirement revisions require a new mission")
+    if trigger["kind"] == "gate_evidence":
+        prior_gates = {node["id"] for node in prior["graph"] if isinstance(node, dict) and node.get("operation") == "gate"}
+        refs = trigger.get("evidence_refs") or []
+        if not refs or any(ref not in prior_gates for ref in refs):
+            raise core.LabError("Gate evidence must name a gate in the prior plan")
     updated = build_plan(mission or prior["mission"], resources)
     if "plan_id" not in updated:
         return {**updated, "prior_plan_id": prior["plan_id"], "trigger": trigger}
