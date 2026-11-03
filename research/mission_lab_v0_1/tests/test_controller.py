@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -276,6 +277,104 @@ def test_resource_and_cost_records_are_strict():
                              "reference_ns_per_byte": 3, "fixed_task_ns": 1000, "score": 0.95}
     with pytest.raises(core.LabError, match="unknown"):
         core.validate_resources(profile)
+
+
+def test_default_resources_grant_no_worker_environment():
+    assert "worker_env" not in core.default_resources()
+
+
+@pytest.mark.parametrize("declared,grants,message", [
+    (["BETA_TOKEN"], {"hash:sample": ["OTHER_TOKEN"]}, "Undeclared worker environment variable: OTHER_TOKEN"),
+    (["PATH"], {}, "platform-controlled"),
+    (["SystemRoot"], {}, "platform-controlled"),
+    (["pythonunbuffered"], {}, "platform-controlled"),
+    (["ALPHA_TOKEN", "alpha_token"], {}, "Duplicate"),
+    (["ALPHA_TOKEN", "ALPHA_TOKEN"], {}, "Duplicate"),
+    (["1TOKEN"], {}, "Invalid worker environment variable name"),
+    (["HAS-DASH"], {}, "Invalid worker environment variable name"),
+    (["ALPHA_TOKEN"], {"hash:sample": ["ALPHA_TOKEN", "ALPHA_TOKEN"]}, "Duplicate"),
+    (["ALPHA_TOKEN"], {"hash:sample": []}, "nonempty"),
+])
+def test_worker_env_rejects_undeclared_reserved_and_malformed_names(declared, grants, message):
+    profile = resources()
+    profile["worker_env"] = {"declared": declared, "grants": grants}
+    with pytest.raises(core.LabError, match=message):
+        core.validate_resources(profile)
+
+
+def test_worker_env_rejects_values_and_unknown_fields_without_echoing_them():
+    secret = "sk-live-secret-value"
+    profile = resources()
+    profile["worker_env"] = {"declared": {"ALPHA_TOKEN": secret}, "grants": {}}
+    with pytest.raises(core.LabError) as caught:
+        core.validate_resources(profile)
+    assert secret not in str(caught.value)
+    profile = resources()
+    profile["worker_env"] = {"declared": ["ALPHA_TOKEN"], "grants": {}, "values": {"ALPHA_TOKEN": secret}}
+    with pytest.raises(core.LabError, match="unknown") as caught:
+        core.validate_resources(profile)
+    assert secret not in str(caught.value)
+
+
+def test_worker_env_normalizes_names_and_passes_only_grants(planning):
+    planner, mission, profile = planning
+    secret = "granted-token-value"
+    sentinel = "sentinel-secret-value"
+    profile["worker_env"] = {"declared": ["BETA_TOKEN", "ALPHA_TOKEN"],
+                             "grants": {"hash:sample": ["BETA_TOKEN", "ALPHA_TOKEN"]}}
+    plan = planner.build_plan(mission, profile)
+    assert plan["resources"]["worker_env"]["declared"] == ["ALPHA_TOKEN", "BETA_TOKEN"]
+    assert plan["resources"]["worker_env"]["grants"]["hash:sample"] == ["ALPHA_TOKEN", "BETA_TOKEN"]
+    assert secret not in core.canonical(plan)
+    assert planner.validate_plan_record(plan) == plan
+    parent = {name: os.environ[name] for name in core.platform_env_names()
+              if name in os.environ and isinstance(os.environ[name], str)}
+    parent.update(ALPHA_TOKEN=secret, BETA_TOKEN="beta", MISSION_LAB_SENTINEL_SECRET=sentinel,
+                  PYTHONSTARTUP="startup.py", PYTHONUNBUFFERED="0")
+    granted = core.worker_environment(plan["resources"], "hash:sample", parent)
+    withheld = core.worker_environment(plan["resources"], "manifest", parent)
+    assert granted["ALPHA_TOKEN"] == secret
+    assert granted["BETA_TOKEN"] == "beta"
+    assert "ALPHA_TOKEN" not in withheld
+    assert "MISSION_LAB_SENTINEL_SECRET" not in granted
+    assert sentinel not in granted.values()
+    assert "PYTHONSTARTUP" not in granted
+    assert granted["PYTHONUNBUFFERED"] == "1"
+    assert granted["PYTHONDONTWRITEBYTECODE"] == "1"
+    probe = subprocess.run(
+        [sys.executable, "-B", "-c",
+         "import json,os,sys; sys.stdout.write(json.dumps({'names': sorted(os.environ), 'alpha': os.environ.get('ALPHA_TOKEN')}))"],
+        env=granted, capture_output=True, text=True, check=False)
+    assert probe.returncode == 0, probe.stderr
+    child = json.loads(probe.stdout)
+    assert child["names"] == sorted(granted)
+    assert child["alpha"] == secret
+    assert "MISSION_LAB_SENTINEL_SECRET" not in child["names"]
+    assert sentinel not in probe.stdout
+    with pytest.raises(core.LabError, match="not set: ALPHA_TOKEN"):
+        core.worker_environment(plan["resources"], "hash:sample", {"PATH": "/usr/bin"})
+
+
+def test_unknown_environment_grant_is_rejected_before_an_executable_plan(planning):
+    planner, mission, profile = planning
+    profile["worker_env"] = {"declared": ["ALPHA_TOKEN"], "grants": {"missing-task": ["ALPHA_TOKEN"]}}
+    with pytest.raises(core.LabError, match="unknown task: missing-task"):
+        planner.build_plan(mission, profile)
+    mission["unresolved"] = [{"id": "acceptance-gap", "question": "Which output must be preserved?", "affects": "acceptance"}]
+    with pytest.raises(core.LabError, match="unknown task: missing-task"):
+        planner.build_plan(mission, profile)
+
+
+def test_environment_receipt_rejects_an_ungranted_name(planning):
+    planner, mission, profile = planning
+    profile["worker_env"] = {"declared": ["ALPHA_TOKEN"], "grants": {"hash:sample": ["ALPHA_TOKEN"]}}
+    plan = planner.build_plan(mission, profile)
+    names = ["ALPHA_TOKEN", "PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED"]
+    assert core.validate_environment_receipt(names, plan["resources"], "hash:sample") == names
+    with pytest.raises(core.LabError, match="ungranted variable: MISSION_LAB_SENTINEL_SECRET"):
+        core.validate_environment_receipt(sorted(names + ["MISSION_LAB_SENTINEL_SECRET"]), plan["resources"], "hash:sample")
+    with pytest.raises(core.LabError, match="omits a granted variable: ALPHA_TOKEN"):
+        core.validate_environment_receipt(["PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED"], plan["resources"], "hash:sample")
 
 
 def test_fresh_output_can_be_created_only_below_evidence_root(tmp_path):

@@ -26,6 +26,7 @@ def render_report(semantic, observations):
              f"Worker cap: {resources.get('workers')}. Aggregate read-buffer reservation: {resources.get('read_buffer_bytes')} bytes.",
              f"Cost-estimate origin: `{resources.get('estimate_origin')}`.",
              "Reservations constrain registered worker count and explicit input buffers. Total process memory, physical core use, and energy are unknown.",
+             "Worker processes receive a deny-by-default environment: platform start names when set, two controller-forced interpreter flags, and per-task resource grants. Observations list those names and do not retain values.",
              "Predicted schedules use a bounded heuristic. Observed durations include worker startup after launch; costs may differ from predictions.", "",
              "## Outcomes", "", "| Status | Count |", "|---|---:|"]
     for status, count in counts.items():
@@ -37,13 +38,17 @@ def render_report(semantic, observations):
         lines.append(f"| {task['task_id']} | {task['status']} | {detail} | {output.get('size_bytes', '—')} |")
         if task.get("error"):
             lines += ["", f"Retained error for `{task['task_id']}`: `{str(task['error']).replace('`', '')}`", ""]
-    lines += ["", "## Observations", "", "| Task | Estimated duration (ns) | Observed duration (ns) | Reserved buffer bytes |", "|---|---:|---:|---:|"]
+    lines += ["", "## Observations", "",
+              "| Task | Estimated duration (ns) | Observed duration (ns) | Reserved buffer bytes | Environment names |",
+              "|---|---:|---:|---:|---|"]
     if isinstance(observations, dict):
         observations = observations.get("tasks", [])
     for observation in observations:
         if "task_id" in observation and "duration_ns" in observation:
             predicted = profile.get("bindings", {}).get(observation["task_id"], {}).get("duration_ns", "—")
-            lines.append(f"| {observation['task_id']} | {predicted} | {observation['duration_ns']} | {observation.get('reserved_buffer_bytes', '—')} |")
+            names = observation.get("environment_names")
+            rendered = ", ".join(names) if isinstance(names, list) else "—"
+            lines.append(f"| {observation['task_id']} | {predicted} | {observation['duration_ns']} | {observation.get('reserved_buffer_bytes', '—')} | {rendered} |")
     lines += ["", "## Limits and alternative explanations", "",
               "Different cache state, process startup, storage contention, and estimate error can explain timing differences.",
               "Matching digests supports this file-audit contract. It establishes no numerical-model, energy-saving, or general software-generation claim.",
@@ -173,7 +178,7 @@ def validate_observations(plan, semantic, observations, output):
     observed = set()
     for row in observations:
         core.fields(row, ("task_id", "started_ns", "finished_ns", "duration_ns", "pid", "exit_code", "reserved_buffer_bytes", "status", "command",
-                          "process_creation_started_ns", "process_creation_ns"), label="observation")
+                          "process_creation_started_ns", "process_creation_ns", "environment_names"), label="observation")
         if not isinstance(row["task_id"], str) or row["task_id"] not in nodes or row["task_id"] in observed:
             raise core.LabError("Invalid observation task identity")
         observed.add(row["task_id"])
@@ -189,6 +194,7 @@ def validate_observations(plan, semantic, observations, output):
             raise core.LabError("Malformed process observation")
         if row["status"] == "succeeded" and row["exit_code"] != 0:
             raise core.LabError("Success contradicted by observed process status")
+        core.validate_environment_receipt(row["environment_names"], plan["resources"], row["task_id"])
     if semantic["accepted"] and observed != set(nodes):
         raise core.LabError("Accepted execution lacks task observations")
     try:
@@ -197,7 +203,7 @@ def validate_observations(plan, semantic, observations, output):
         raise core.LabError("Malformed execution events") from exc
     if not events or events[0].get("kind") != "run_started" or events[-1].get("kind") != "run_completed":
         raise core.LabError("Incomplete event ledger")
-    active, done, launched = {}, {}, set()
+    active, done, launched, launched_environments = {}, {}, set(), {}
     last_time = -1
     allowed = {"run_started", "run_completed", "launched", "completed", "blocked", "launch_failed", "executor_failed", "aborted", "final_identity_failed"}
     for index, event in enumerate(events):
@@ -217,6 +223,8 @@ def validate_observations(plan, semantic, observations, output):
             needed = plan["bindings"][task_id]["buffer_bytes"]
             if event.get("reserved_buffer_bytes") != needed:
                 raise core.LabError("Event reservation contradicts binding")
+            core.validate_environment_receipt(event.get("environment_names"), plan["resources"], task_id)
+            launched_environments[task_id] = event["environment_names"]
             active[task_id] = needed
             launched.add(task_id)
         elif kind == "completed":
@@ -232,6 +240,9 @@ def validate_observations(plan, semantic, observations, output):
                     event.get("workers_active") != len(active) or event.get("used_buffer_bytes") != sum(active.values()) or
                     len(active) > plan["resources"]["workers"] or sum(active.values()) > plan["resources"]["read_buffer_bytes"]):
                 raise core.LabError("Execution event violates resource accounting")
+    for task_id, names in ((row["task_id"], row["environment_names"]) for row in observations):
+        if launched_environments.get(task_id) != names:
+            raise core.LabError("Observation environment receipt contradicts the launch event")
     if active or events[-1].get("accepted") is not semantic["accepted"]:
         raise core.LabError("Terminal event contradicts execution status")
     if semantic["accepted"] and set(done) != set(nodes):

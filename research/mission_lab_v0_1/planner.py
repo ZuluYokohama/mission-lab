@@ -96,10 +96,11 @@ def construct_schedule(graph, bindings, resources):
 def build_plan(mission, resources, *, sources=None, check_files=True):
     mission = core.validate_mission(mission, check_files=check_files)
     resources = core.validate_resources(resources)
+    graph = compile_graph(mission)
+    core.check_worker_env_tasks(resources, [node["id"] for node in graph])
     if mission["unresolved"]:
         return {"schema_version": 1, "status": "needs_clarification", "mission_id": mission["mission_id"],
                 "questions": mission["unresolved"], "machine_validation": True, "human_review": False}
-    graph = compile_graph(mission)
     inputs = {item["id"]: item for item in mission["inputs"]}
     choices = []
     options = {"sha256": ("whole_v1", "stream_v1"), "reference_sha256": ("reference_v1",),

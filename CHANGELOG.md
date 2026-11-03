@@ -4,6 +4,7 @@ Changes here describe the repository, not completion of the independent V&V camp
 
 ## Unreleased
 
+- Stop registered workers from inheriting the controller process environment. Launch them with a platform start allowlist, two forced interpreter flags, and per-task resource grants. Reject undeclared grant names at validation. Record environment names, not values, on launch events and observations.
 - Add contributor, security, development, review and roadmap documentation.
 - Define repository checks, Windows and Ubuntu test jobs, and advisory CodeRabbit review configuration. Hosted checks and integration availability require verification after publication.
 - Preserve the existing package layout, recorded validation and local evidence boundaries.

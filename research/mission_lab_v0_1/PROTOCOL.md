@@ -14,7 +14,7 @@ Collect mission/resource records and immutable input identities. For public-rele
 
 Represent requirements and acceptance criteria separately from unresolved questions. Preserve uncertainty about intent, acceptance, authority and tradeoffs. The source registry records exact public commit identities where available; mutable JPL web content has a collection record and a release-authored interpretation-note hash. No hidden source revision or empirical cost estimate is inferred.
 
-Distinguish controller state from worker state. An estimate of a task's duration is not its measured elapsed time. A read-buffer reservation is not RSS. A worker slot is not a physical CPU core. A deterministic digest check is not a general scientific validity check.
+Distinguish controller state from worker state. An estimate of a task's duration is not its measured elapsed time. A read-buffer reservation is not RSS. A worker slot is not a physical CPU core. A deterministic digest check is not a general scientific validity check. A filtered worker environment is not an operating-system sandbox, and a recorded environment name is not an external measurement of the child process.
 
 ## Decide
 
@@ -26,7 +26,7 @@ Freeze each plan by hashing the mission, resource profile, graph, bindings, esti
 
 ## Act and verify
 
-Only own Python worker subprocesses execute the registered operations. Retain observations, task outputs, exit statuses, timeouts, errors, dispatch events and declared reservations. Failed dependencies block downstream work. A successful worker status must agree with its actual return code and validated output schema. Kill and reap timed-out workers through the executor's own process handles.
+Only own Python worker subprocesses execute the registered operations. The controller does not pass its process environment through. Each worker receives the platform start allowlist, two forced interpreter flags, and environment names the resource profile grants to that task. Evidence records those names and omits values. An unset grant fails that task before launch. Retain observations, task outputs, exit statuses, timeouts, errors, dispatch events and declared reservations. Failed dependencies block downstream work. A successful worker status must agree with its actual return code and validated output schema. Kill and reap timed-out workers through the executor's own process handles.
 
 Compare primary and reference SHA-256 values with each other and the mission input identity. Assemble a manifest only from successful verifications. Check goal predicates and resource reservations against retained events. Replay reconstructs recorded conclusions offline and detects altered evidence. It does not rerun a model or fabricate omitted observations.
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 from pathlib import Path
 
@@ -33,6 +34,25 @@ OPERATOR_CONTRACTS = {
 }
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$")
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
+ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+# Copied only when already set. These names let CPython start and import on the
+# two CI platforms. They are not a sandbox, a credential set, or a TLS trust store.
+_POSIX_PLATFORM_ENV = frozenset({
+    "HOME", "LANG", "LC_ALL", "LC_CTYPE", "PATH", "TMPDIR", "TZ",
+    "PYTHONCOERCECLOCALE", "PYTHONHOME", "PYTHONIOENCODING", "PYTHONNOUSERSITE",
+    "PYTHONPATH", "PYTHONSAFEPATH", "PYTHONUTF8",
+})
+_WINDOWS_PLATFORM_ENV = frozenset({
+    "APPDATA", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "PATH", "PATHEXT",
+    "SYSTEMDRIVE", "SystemRoot", "TEMP", "TMP", "USERPROFILE", "WINDIR",
+    "PYTHONCOERCECLOCALE", "PYTHONHOME", "PYTHONIOENCODING",
+    "PYTHONLEGACYWINDOWSFSENCODING", "PYTHONLEGACYWINDOWSSTDIO",
+    "PYTHONNOUSERSITE", "PYTHONPATH", "PYTHONSAFEPATH", "PYTHONUTF8",
+})
+FORCED_WORKER_ENV = {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1"}
+_RESERVED_ENV_NAMES = _POSIX_PLATFORM_ENV | _WINDOWS_PLATFORM_ENV | frozenset(FORCED_WORKER_ENV)
+_MAX_DECLARED_ENV = 32
+_MAX_ENV_GRANTS = 64
 
 
 class LabError(ValueError):
@@ -147,9 +167,155 @@ def new_output(requested, *, evidence_root=None):
     return output
 
 
+def platform_env_names():
+    """Sorted start-variable names for this operating system."""
+    names = _WINDOWS_PLATFORM_ENV if os.name == "nt" else _POSIX_PLATFORM_ENV
+    return tuple(sorted(names))
+
+
+def _env_name(name):
+    if not isinstance(name, str) or ENV_NAME.fullmatch(name) is None:
+        raise LabError("Invalid worker environment variable name")
+    return name
+
+
+def validate_worker_env(value):
+    """Accept declared names and per-task grants. Values are not a schema field."""
+    fields(value, ("declared", "grants"), label="worker_env")
+    declared = value["declared"]
+    if not isinstance(declared, list) or len(declared) > _MAX_DECLARED_ENV:
+        raise LabError("worker_env declared must be a list of at most 32 names")
+    reserved = {name.casefold() for name in _RESERVED_ENV_NAMES}
+    names, seen = [], set()
+    for name in declared:
+        _env_name(name)
+        folded = name.casefold()
+        if folded in reserved:
+            raise LabError("Worker environment variable is platform-controlled and cannot be granted: " + name)
+        if folded in seen:
+            raise LabError("Duplicate worker environment variable: " + name)
+        seen.add(folded)
+        names.append(name)
+    grants = value["grants"]
+    if not isinstance(grants, dict) or len(grants) > _MAX_ENV_GRANTS:
+        raise LabError("worker_env grants must be an object of at most 64 tasks")
+    normalized, declared_set = {}, set(names)
+    for task_id, requested in grants.items():
+        identifier(task_id, "worker_env task id")
+        if not isinstance(requested, list) or not requested or len(requested) > _MAX_DECLARED_ENV:
+            raise LabError("worker_env grant must be a nonempty list of at most 32 names")
+        grant_names, grant_seen = [], set()
+        for name in requested:
+            _env_name(name)
+            if name not in declared_set:
+                raise LabError("Undeclared worker environment variable: " + name)
+            if name in grant_seen:
+                raise LabError("Duplicate worker environment variable: " + name)
+            grant_seen.add(name)
+            grant_names.append(name)
+        normalized[task_id] = sorted(grant_names)
+    return {"declared": sorted(names), "grants": normalized}
+
+
+def check_worker_env_tasks(resources, task_ids):
+    """Reject grants that name a task the executable graph does not contain."""
+    worker_env = resources.get("worker_env") if isinstance(resources, dict) else None
+    if not worker_env:
+        return
+    known = set(task_ids)
+    for task_id in worker_env["grants"]:
+        if task_id not in known:
+            raise LabError("Worker environment grant names an unknown task: " + task_id)
+
+
+def granted_names(resources, task_id):
+    worker_env = resources.get("worker_env") if isinstance(resources, dict) else None
+    if not isinstance(worker_env, dict):
+        return ()
+    grants = worker_env.get("grants")
+    if not isinstance(grants, dict):
+        return ()
+    names = grants.get(task_id, ())
+    return tuple(names) if isinstance(names, list) else ()
+
+
+def _platform_value(parent, name):
+    if os.name == "nt":
+        for key, value in parent.items():
+            if isinstance(key, str) and key.casefold() == name.casefold() and isinstance(value, str):
+                return value
+        return None
+    value = parent[name] if name in parent else None
+    return value if isinstance(value, str) else None
+
+
+def _grant_value(parent, name):
+    if name in parent and isinstance(parent[name], str):
+        return parent[name]
+    if os.name == "nt":
+        matches = [value for key, value in parent.items()
+                   if isinstance(key, str) and key.casefold() == name.casefold() and isinstance(value, str)]
+        if len(matches) == 1:
+            return matches[0]
+    if name in parent:
+        raise LabError("Granted worker environment variable is not a string: " + name)
+    raise LabError("Granted worker environment variable is not set: " + name)
+
+
+def worker_environment(resources, task_id, parent=None):
+    """Build one worker environment. Unlisted parent variables are not copied."""
+    if parent is None:
+        parent = os.environ
+    if not hasattr(parent, "items"):
+        raise LabError("Worker environment parent must be a mapping")
+    env = {}
+    for name in platform_env_names():
+        value = _platform_value(parent, name)
+        if value is not None:
+            env[name] = value
+    worker_env = resources.get("worker_env") if isinstance(resources, dict) else None
+    if worker_env:
+        declared = worker_env.get("declared")
+        if not isinstance(declared, list):
+            raise LabError("worker_env declared must be a list of at most 32 names")
+        declared_set = set(declared)
+        reserved = {item.casefold() for item in _RESERVED_ENV_NAMES}
+        for name in granted_names(resources, task_id):
+            if not isinstance(name, str) or name.casefold() in reserved:
+                raise LabError("Worker environment variable is platform-controlled and cannot be granted: " + str(name))
+            if name not in declared_set:
+                raise LabError("Undeclared worker environment variable: " + name)
+            env[name] = _grant_value(parent, name)
+    env.update(FORCED_WORKER_ENV)
+    return env
+
+
+def validate_environment_receipt(names, resources, task_id):
+    """Check a name-only receipt. Either platform's start names are acceptable."""
+    if (not isinstance(names, list) or any(not isinstance(name, str) for name in names)
+            or names != sorted(set(names))):
+        raise LabError("Worker environment receipt must be sorted unique names")
+    for name in names:
+        if ENV_NAME.fullmatch(name) is None:
+            raise LabError("Malformed worker environment name")
+    granted = set(granted_names(resources, task_id))
+    allowed = set(_POSIX_PLATFORM_ENV) | set(_WINDOWS_PLATFORM_ENV) | set(FORCED_WORKER_ENV) | granted
+    actual = set(names)
+    extra = sorted(actual - allowed)
+    if extra:
+        raise LabError("Worker environment receipt names an ungranted variable: " + extra[0])
+    missing = sorted(granted - actual)
+    if missing:
+        raise LabError("Worker environment receipt omits a granted variable: " + missing[0])
+    omitted = sorted(set(FORCED_WORKER_ENV) - actual)
+    if omitted:
+        raise LabError("Worker environment receipt omits a controller-forced variable: " + omitted[0])
+    return names
+
+
 def validate_resources(value):
     fields(value, ("schema_version", "workers", "read_buffer_bytes", "timeout_seconds", "estimate_origin"),
-           ("cost_model",), "resources")
+           ("cost_model", "worker_env"), "resources")
     _version(value["schema_version"], "resources")
     integer(value["workers"], 1, 8, "workers")
     integer(value["read_buffer_bytes"], 1, 2**40, "read_buffer_bytes")
@@ -165,7 +331,10 @@ def validate_resources(value):
         integer(number, 1, 10**12, key)
     if value["estimate_origin"] == "measured" and "cost_model" not in value:
         raise LabError("Measured profiles require an explicit cost_model; defaults are injected")
-    return {**value, "cost_model": dict(costs)}
+    result = {**value, "cost_model": dict(costs)}
+    if "worker_env" in value:
+        result["worker_env"] = validate_worker_env(value["worker_env"])
+    return result
 
 
 def default_resources():
