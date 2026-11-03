@@ -64,6 +64,11 @@ FORCED_WORKER_ENV = {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1"}
 _RESERVED_ENV_NAMES = _POSIX_PLATFORM_ENV | _WINDOWS_PLATFORM_ENV | frozenset(FORCED_WORKER_ENV)
 _MAX_DECLARED_ENV = 32
 _MAX_ENV_GRANTS = 64
+# Closed graphs for agent-sized task sets: the 25 hash/reference/verify/manifest
+# nodes of an 8-input mission, plus about two thousand additional llm:grok nodes.
+# A long chain makes ancestor checks quadratic; this cap keeps that work bounded.
+# It is not a measured throughput limit. Inputs stay 1..8.
+MAX_GRAPH_NODES = 2048
 
 
 class LabError(ValueError):
@@ -453,8 +458,8 @@ def validate_node_record(node):
 
 
 def validate_graph(graph, inputs):
-    if not isinstance(graph, list) or not 1 <= len(graph) <= 64:
-        raise LabError("Graph requires 1..64 nodes")
+    if not isinstance(graph, list) or not 1 <= len(graph) <= MAX_GRAPH_NODES:
+        raise LabError("Graph requires 1.." + str(MAX_GRAPH_NODES) + " nodes")
     known_inputs = {item["id"] for item in inputs}
     nodes, writers = {}, {}
     for node in graph:
