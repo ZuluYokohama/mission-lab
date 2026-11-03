@@ -23,11 +23,27 @@ The reference is a separate registered execution path using standard-library has
 
 ## Resource profile and estimates
 
-Fields are `schema_version`, `workers`, `read_buffer_bytes`, `timeout_seconds`, `estimate_origin`, and optional `cost_model`. Worker slots are 1..8. Read-buffer reservation bytes are 1..2^40. Timeout seconds must be finite, positive and at most 3,600. Cost origins are `injected_fixture` or `measured`; measured profiles require explicit supplied costs.
+Fields are `schema_version`, `workers`, `read_buffer_bytes`, `timeout_seconds`, `estimate_origin`, and optional `cost_model` and `worker_env`. Worker slots are 1..8. Read-buffer reservation bytes are 1..2^40. Timeout seconds must be finite, positive and at most 3,600. Cost origins are `injected_fixture` or `measured`; measured profiles require explicit supplied costs.
 
 The cost model declares whole, stream and reference nanoseconds per byte plus fixed task nanoseconds. Defaults are injected illustrative costs. Supplying a measured label does not independently authenticate the measurement; provenance must substantiate any scientific interpretation. Estimated schedule duration and actual wall-clock observations remain separate fields.
 
 The executor bounds its worker count and sum of registered read-buffer reservations. Whole-file reservations depend on input size; streaming and reference paths have registered chunk bounds. These bounds exclude interpreter and library overhead, incidental metadata/state allocations, process RSS, OS caches, cores, GPU allocations and energy.
+
+## Worker environment
+
+Registered workers do not inherit the controller process environment. The default is deny. For each launch the executor builds a new mapping with three parts:
+
+- platform start names that are already set on the controller, limited to names used to start CPython and locate imports
+- `PYTHONDONTWRITEBYTECODE=1` and `PYTHONUNBUFFERED=1`, set by the controller rather than copied
+- names the resource profile grants to that task, copied from the controller when they are set to strings
+
+On POSIX the start names are `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `PATH`, `PYTHONCOERCECLOCALE`, `PYTHONHOME`, `PYTHONIOENCODING`, `PYTHONNOUSERSITE`, `PYTHONPATH`, `PYTHONSAFEPATH`, `PYTHONUTF8`, `TMPDIR` and `TZ`. On Windows they are `APPDATA`, `HOMEDRIVE`, `HOMEPATH`, `LOCALAPPDATA`, `PATH`, `PATHEXT`, `PYTHONCOERCECLOCALE`, `PYTHONHOME`, `PYTHONIOENCODING`, `PYTHONLEGACYWINDOWSFSENCODING`, `PYTHONLEGACYWINDOWSSTDIO`, `PYTHONNOUSERSITE`, `PYTHONPATH`, `PYTHONSAFEPATH`, `PYTHONUTF8`, `SYSTEMDRIVE`, `SYSTEMROOT`, `TEMP`, `TMP`, `USERPROFILE` and `WINDIR`. A name is omitted when it is unset. The authoritative lists are `platform_env_names()` and `FORCED_WORKER_ENV` in `core.py`. Windows matches allowlist, grant, and reserved names without regard to case, and the executor passes and records those names in uppercase, the spelling CPython reports for the child. A case variant cannot grant a reserved name or copy a variable that was not granted.
+
+Optional `worker_env` contains `declared` and `grants` only. `declared` is a list of at most 32 environment names. `grants` maps at most 64 task ids to nonempty lists of at most 32 of those names. Validation rejects undeclared names, duplicate names, malformed names, embedded values, names that collide with the platform or forced sets, unknown fields, and grants whose task id is not in the executable graph. A declared name that no task is granted is not copied. An unset or non-string granted name fails that task before a process is created; an empty string is not substituted.
+
+Plans and resource profiles record grant names, not values. Plan normalization does not depend on the host operating system. Each launch event and task observation records sorted `environment_names` and no values. Replay rejects a receipt that names a variable outside the two platform lists, the forced flags, and that task's grants, or that omits a granted name or a forced flag. It also rejects an observation whose names differ from the launch event, and a receipt that repeats one name under another case. Name comparison folds case, so a Windows record can be replayed on POSIX. That check does not prove which platform names were set or the exact spelling a child reported, and it does not observe the child process.
+
+This is process-environment filtering for the registered worker command. It is not a system-call sandbox, a credential store, or a statement that a worker which received a grant cannot disclose that value. TLS trust stores, service endpoints and model credentials are outside the start allowlist.
 
 ## Identity, output authority and replay
 

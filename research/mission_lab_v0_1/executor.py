@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import queue
 import re
@@ -14,8 +13,9 @@ import time
 import datetime as dt
 import platform
 
-from .core import (ARCHIVE, LabError, REVISIONS, ROOT, WORKSPACE, canonical, confined_path, digest_object, file_hash,
-                   load_plan, new_output, read_json, verify_sources, write_json)
+from .core import (ARCHIVE, FORCED_WORKER_ENV, LabError, REVISIONS, ROOT, WORKSPACE, canonical, confined_path,
+                   digest_object, file_hash, load_plan, new_output, platform_env_names, read_json, verify_sources,
+                   worker_environment, write_json)
 from .operators import required_buffer
 
 
@@ -140,10 +140,16 @@ def run_plan_data(plan, out):
     nodes = _check_plan(plan)
     _check_inputs(plan)
     directory = new_output(out)
-    write_json(directory / "environment.json", {"schema_version": 1, "python_version": sys.version,
-               "executable": sys.executable, "platform": platform.platform(),
-               "started_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
-               "resource_contract": "registered worker slots and explicit input buffers; controller integrity checks, process overhead, RSS, cores and energy are outside this reservation"})
+    write_json(directory / "environment.json", {
+        "schema_version": 1, "python_version": sys.version, "executable": sys.executable,
+        "platform": platform.platform(), "started_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "resource_contract": "registered worker slots and explicit input buffers; controller integrity checks, process overhead, RSS, cores and energy are outside this reservation",
+        "worker_environment": {
+            "schema_version": 1, "default": "deny", "platform_names": list(platform_env_names()),
+            "forced_names": sorted(FORCED_WORKER_ENV), "values_recorded": False,
+            "note": "Workers receive platform_names when those variables are set, the forced interpreter flags, and resource-profile grants for that task. Other controller variables are not passed. Values are not recorded.",
+        },
+    })
     private = directory / "private"
     private.mkdir()
     staged = directory / "staged"
@@ -223,17 +229,17 @@ def run_plan_data(plan, out):
                 try:
                     _check_inputs(plan)
                     command = [sys.executable, "-B", "-m", "research.mission_lab_v0_1.worker", "--job", str(job_path), "--result", str(result_path)]
-                    env = os.environ.copy()
-                    env.update(PYTHONDONTWRITEBYTECODE="1", PYTHONUNBUFFERED="1")
+                    env = worker_environment(plan["resources"], task_id)
+                    environment_names = sorted(env)
                     creation_started = time.perf_counter_ns()
                     with stdout_path.open("x", encoding="utf-8") as stdout, stderr_path.open("x", encoding="utf-8") as stderr:
                         child = subprocess.Popen(command, cwd=WORKSPACE, env=env, stdout=stdout, stderr=stderr, shell=False)
                     started = time.perf_counter_ns()
                     running[task_id] = {"child": child, "started": started, "job": job,
                                         "result_path": result_path, "index": index, "command": command,
-                                        "creation_started": creation_started}
+                                        "creation_started": creation_started, "environment_names": environment_names}
                     used_buffer += binding["buffer_bytes"]
-                    event("launched", task_id, pid=child.pid, reserved_buffer_bytes=binding["buffer_bytes"], used_buffer_bytes=used_buffer, workers_active=len(running))
+                    event("launched", task_id, pid=child.pid, reserved_buffer_bytes=binding["buffer_bytes"], used_buffer_bytes=used_buffer, workers_active=len(running), environment_names=environment_names)
                     threading.Thread(target=wait_for_worker, args=(task_id, child, started), daemon=True).start()
                 except Exception as error:
                     if task_id in running:
@@ -285,7 +291,8 @@ def run_plan_data(plan, out):
                                "duration_ns": finished - active["started"], "pid": child.pid,
                                "process_creation_started_ns": active["creation_started"], "process_creation_ns": active["started"] - active["creation_started"],
                                "exit_code": code, "reserved_buffer_bytes": plan["bindings"][task_id]["buffer_bytes"],
-                               "status": result["status"], "command": active["command"]}
+                               "status": result["status"], "command": active["command"],
+                               "environment_names": active["environment_names"]}
                 observations.append(observation)
                 used_buffer -= plan["bindings"][task_id]["buffer_bytes"]
                 del running[task_id]
