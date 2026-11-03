@@ -17,12 +17,19 @@ from .core import (ARCHIVE, FORCED_WORKER_ENV, LabError, REVISIONS, ROOT, WORKSP
                    digest_object, file_hash, load_plan, new_output, platform_env_names, read_json, verify_sources,
                    worker_environment, write_json)
 from . import grok
+from .budget import (account_record, add_cost, exceeds, ledger_for, reservation_for, reservation_numbers,
+                     settled_actual, within_reservation, zero_cost)
 from .operators import required_buffer
 
 
 def _failure(task_id, error, status="failed"):
     return {"task_id": task_id, "status": status, "output": None,
             "error": {"type": type(error).__name__, "message": str(error)}}
+
+
+def _worker_result(result):
+    """Dependency payload for a worker. The model account stays on the controller record."""
+    return {key: result[key] for key in ("task_id", "status", "output", "error")}
 
 
 def _inputs(plan):
@@ -92,6 +99,12 @@ def _check_plan(plan):
         needed = required_buffer(node["operation"], binding["candidate"], inputs.get(node.get("input_id")), node=node, inputs=inputs)
         if binding.get("buffer_bytes") != needed or needed > plan["resources"]["read_buffer_bytes"]:
             raise LabError("Invalid or infeasible read-buffer reservation")
+        expected_reservation = reservation_for(node, inputs, plan["resources"])
+        if expected_reservation is None:
+            if "model_reservation" in binding:
+                raise LabError("Model reservation is present without a model budget")
+        elif binding.get("model_reservation") != expected_reservation:
+            raise LabError("Model reservation does not match the declared budget")
     return nodes
 
 
@@ -145,10 +158,13 @@ def run_plan_data(plan, out):
     nodes = _check_plan(plan)
     _check_inputs(plan)
     directory = new_output(out)
+    resource_contract = "registered worker slots and explicit input buffers; an llm:grok task reserves only declared prompt or fixture bytes and caps the response separately; controller integrity checks, process overhead, RSS, cores and energy are outside this reservation"
+    if "model_budget" in plan["resources"]:
+        resource_contract += " A declared model budget reserves worst-case requests, token bounds, and profile-priced spend before launch, then settles provider-reported usage. That ledger is not an invoice or an energy measurement."
     write_json(directory / "environment.json", {
         "schema_version": 1, "python_version": sys.version, "executable": sys.executable,
         "platform": platform.platform(), "started_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "resource_contract": "registered worker slots and explicit input buffers; an llm:grok task reserves only declared prompt or fixture bytes and caps the response separately; controller integrity checks, process overhead, RSS, cores and energy are outside this reservation",
+        "resource_contract": resource_contract,
         "worker_environment": {
             "schema_version": 1, "default": "deny", "platform_names": list(platform_env_names()),
             "forced_names": sorted(FORCED_WORKER_ENV), "values_recorded": False,
@@ -175,6 +191,9 @@ def run_plan_data(plan, out):
     observations = []
     events = []
     used_buffer = 0
+    limits = plan["resources"].get("model_budget")
+    accounted = zero_cost()
+    inflight = {}
     completions = queue.Queue()
     queued = []
     executor_error = None
@@ -191,6 +210,18 @@ def run_plan_data(plan, out):
         with (directory / "events.jsonl").open("a", encoding="utf-8", newline="\n") as handle:
             handle.write(json.dumps(events[-1], sort_keys=True, allow_nan=False) + "\n")
 
+    def current_accounted():
+        total = accounted
+        for held in inflight.values():
+            total = add_cost(total, held)
+        return total
+
+    def with_account(task_id, result, state, actual=None):
+        if limits is None:
+            return result
+        recorded = account_record(plan["bindings"][task_id]["model_reservation"], state, actual)
+        return {**result, "model_account": recorded}
+
     def wait_for_worker(task_id, child, started):
         try:
             remaining = max(0.0, timeout - (time.perf_counter_ns() - started) / 1e9)
@@ -202,17 +233,23 @@ def run_plan_data(plan, out):
             code, error = None, failure
         completions.put((task_id, code, time.perf_counter_ns(), error))
 
-    event("run_started", workers_limit=plan["resources"]["workers"], buffer_limit=plan["resources"]["read_buffer_bytes"], enforced_task_timeout_seconds=timeout)
+    started_fields = {}
+    if limits is not None:
+        started_fields = {"model_budget": limits, "model_accounted": zero_cost()}
+    event("run_started", workers_limit=plan["resources"]["workers"], buffer_limit=plan["resources"]["read_buffer_bytes"], enforced_task_timeout_seconds=timeout, **started_fields)
     try:
         while pending or running:
             progress = False
             for task_id in sorted(pending, key=lambda name: (-tails[name], name)):
                 node = nodes[task_id]
                 if any(dep in results and results[dep]["status"] != "succeeded" for dep in node["depends_on"]):
-                    results[task_id] = _failure(task_id, LabError("A dependency did not succeed"), "blocked")
+                    results[task_id] = with_account(task_id, _failure(task_id, LabError("A dependency did not succeed"), "blocked"), "unlaunched")
                     write_json(directory / ("result_" + str(order.get(task_id, len(order))) + ".json"), results[task_id])
                     pending.remove(task_id)
-                    event("blocked", task_id)
+                    blocked_fields = {}
+                    if limits is not None:
+                        blocked_fields = {"model_state": "unlaunched", "model_accounted": current_accounted()}
+                    event("blocked", task_id, **blocked_fields)
                     progress = True
                     continue
                 if not all(dep in results for dep in node["depends_on"]):
@@ -220,10 +257,21 @@ def run_plan_data(plan, out):
                 binding = plan["bindings"][task_id]
                 if len(running) >= plan["resources"]["workers"] or used_buffer + binding["buffer_bytes"] > plan["resources"]["read_buffer_bytes"]:
                     continue
+                if limits is not None:
+                    reservation = binding["model_reservation"]
+                    projected = add_cost(current_accounted(), reservation_numbers(reservation))
+                    if exceeds(projected, limits):
+                        results[task_id] = with_account(
+                            task_id, _failure(task_id, LabError("Model budget cannot reserve task " + task_id), "blocked"), "refused")
+                        write_json(directory / ("result_" + str(order.get(task_id, len(order))) + ".json"), results[task_id])
+                        pending.remove(task_id)
+                        event("refused", task_id, model_reserved=reservation, model_accounted=current_accounted())
+                        progress = True
+                        continue
                 index = order.get(task_id, len(order))
                 job = {"schema_version": 1, "node": node, "binding": binding,
                        "input": inputs.get(node.get("input_id")),
-                       "dependencies": {dep: results[dep] for dep in node["depends_on"]}}
+                       "dependencies": {dep: _worker_result(results[dep]) for dep in node["depends_on"]}}
                 if node["operation"] == "llm:grok":
                     if node.get("transport") == "fixture":
                         job["fixture"] = inputs[node["fixture_id"]]
@@ -251,19 +299,31 @@ def run_plan_data(plan, out):
                                         "result_path": result_path, "index": index, "command": command,
                                         "creation_started": creation_started, "environment_names": environment_names}
                     used_buffer += binding["buffer_bytes"]
-                    event("launched", task_id, pid=child.pid, reserved_buffer_bytes=binding["buffer_bytes"], used_buffer_bytes=used_buffer, workers_active=len(running), environment_names=environment_names)
+                    if limits is not None:
+                        inflight[task_id] = reservation_numbers(binding["model_reservation"])
+                    launch_fields = {}
+                    if limits is not None:
+                        launch_fields = {"model_reserved": binding["model_reservation"], "model_accounted": current_accounted()}
+                    event("launched", task_id, pid=child.pid, reserved_buffer_bytes=binding["buffer_bytes"], used_buffer_bytes=used_buffer, workers_active=len(running), environment_names=environment_names, **launch_fields)
                     threading.Thread(target=wait_for_worker, args=(task_id, child, started), daemon=True).start()
                 except Exception as error:
                     if task_id in running:
                         del running[task_id]
                         used_buffer -= binding["buffer_bytes"]
+                    released = task_id in inflight
+                    if released:
+                        del inflight[task_id]
                     if child is not None:
                         if child.poll() is None:
                             child.kill()
                         child.wait()
-                    results[task_id] = _failure(task_id, error)
+                    state = "released" if released else "unlaunched"
+                    results[task_id] = with_account(task_id, _failure(task_id, error), state)
                     write_json(directory / ("result_" + str(index) + ".json"), results[task_id])
-                    event("launch_failed", task_id, error=results[task_id]["error"])
+                    failed_fields = {"error": results[task_id]["error"]}
+                    if limits is not None:
+                        failed_fields.update(model_state=state, model_accounted=current_accounted())
+                    event("launch_failed", task_id, **failed_fields)
                 progress = True
             while True:
                 try:
@@ -293,10 +353,21 @@ def run_plan_data(plan, out):
                 else:
                     try:
                         result = _validate_result(read_json(active["result_path"]), active["job"], code)
+                        if limits is not None and result["status"] == "succeeded":
+                            within_reservation(settled_actual(active["job"]["node"], result["output"], limits), plan["bindings"][task_id]["model_reservation"])
                         if result["status"] == "succeeded" and active["job"]["node"]["operation"] == "llm:grok":
                             grok.promote_artifacts(directory, result["output"], active["job"])
                     except Exception as error:
                         result = _failure(task_id, error)
+                if limits is not None:
+                    held = inflight.pop(task_id)
+                    if result["status"] == "succeeded":
+                        actual = settled_actual(nodes[task_id], result["output"], limits)
+                        accounted = add_cost(accounted, actual)
+                        result = with_account(task_id, result, "settled", actual)
+                    else:
+                        accounted = add_cost(accounted, held)
+                        result = with_account(task_id, result, "charged")
                 results[task_id] = result
                 if result["status"] == "succeeded":
                     write_json(staged / (str(active["index"]) + ".json"), result["output"])
@@ -307,15 +378,27 @@ def run_plan_data(plan, out):
                                "exit_code": code, "reserved_buffer_bytes": plan["bindings"][task_id]["buffer_bytes"],
                                "status": result["status"], "command": active["command"],
                                "environment_names": active["environment_names"]}
+                if "model_account" in result:
+                    observation["model_account"] = result["model_account"]
                 observations.append(observation)
                 used_buffer -= plan["bindings"][task_id]["buffer_bytes"]
                 del running[task_id]
-                event("completed", task_id, status=result["status"], used_buffer_bytes=used_buffer, workers_active=len(running))
+                completed_fields = {}
+                if limits is not None:
+                    completed_fields = {
+                        "model_state": result["model_account"]["state"],
+                        "model_actual": result["model_account"]["actual"],
+                        "model_accounted": current_accounted(),
+                    }
+                event("completed", task_id, status=result["status"], used_buffer_bytes=used_buffer, workers_active=len(running), **completed_fields)
                 progress = True
             if pending and not running and not progress:
                 for task_id in sorted(pending):
-                    results[task_id] = _failure(task_id, LabError("Dependency deadlock or infeasible ready node"), "blocked")
-                    event("blocked", task_id, reason="deadlock_or_infeasible")
+                    results[task_id] = with_account(task_id, _failure(task_id, LabError("Dependency deadlock or infeasible ready node"), "blocked"), "unlaunched")
+                    stalled_fields = {"reason": "deadlock_or_infeasible"}
+                    if limits is not None:
+                        stalled_fields.update(model_state="unlaunched", model_accounted=current_accounted())
+                    event("blocked", task_id, **stalled_fields)
                 pending.clear()
             if running and not progress:
                 nearest = min(active["started"] + timeout * 1e9 for active in running.values())
@@ -329,14 +412,22 @@ def run_plan_data(plan, out):
         event("executor_failed", error=executor_error)
         for task_id in sorted(pending | set(running)):
             status = "failed" if task_id in running else "blocked"
-            results[task_id] = _failure(task_id, error, status)
+            if limits is not None and task_id in inflight:
+                accounted = add_cost(accounted, inflight.pop(task_id))
+                state = "charged"
+            else:
+                state = "unlaunched"
+            results[task_id] = with_account(task_id, _failure(task_id, error, status), state)
             target = directory / ("result_" + str(order[task_id]) + ".json")
             if not target.exists():
                 write_json(target, results[task_id])
             elif read_json(target) != results[task_id]:
                 write_json(private / (str(order[task_id]) + "_pre_abort_result.json"), read_json(target))
                 target.write_text(canonical(results[task_id]), encoding="utf-8", newline="\n")
-            event("aborted", task_id, status=status)
+            aborted_fields = {}
+            if limits is not None:
+                aborted_fields = {"model_state": state, "model_accounted": current_accounted()}
+            event("aborted", task_id, status=status, **aborted_fields)
     finally:
         for active in running.values():
             if active["child"].poll() is None:
@@ -350,22 +441,33 @@ def run_plan_data(plan, out):
         identity_error = {"type": type(error).__name__, "message": str(error)}
         event("final_identity_failed", error=identity_error)
     accepted = tasks_passed and identity_error is None and executor_error is None
+    task_rows = [results[key] for key in sorted(results)]
+    ledger = ledger_for(limits, task_rows) if limits is not None else None
+    telemetry = {"peak_workers_observed": max((row.get("workers_active", 0) for row in events), default=0),
+                 "peak_reserved_buffer_bytes": max((row.get("used_buffer_bytes", 0) for row in events), default=0),
+                 "enforced_timeout_seconds": timeout, "total_process_memory_bytes": None, "physical_cpu_cores_used": None}
+    if ledger is not None:
+        telemetry["model_budget"] = {
+            "accounted": ledger["totals"]["accounted"],
+            "remaining": ledger["totals"]["remaining"],
+            "within_limits": True,
+        }
     validation = {"passed": accepted, "obligations": plan["obligations"],
                   "all_registered_tasks_succeeded": tasks_passed, "sources_and_inputs_rechecked_before_launch": True,
                   "final_sources_and_inputs_match": identity_error is None, "identity_error": identity_error,
-                  "executor_error": executor_error,
-                  "resource_telemetry": {"peak_workers_observed": max((row.get("workers_active", 0) for row in events), default=0),
-                    "peak_reserved_buffer_bytes": max((row.get("used_buffer_bytes", 0) for row in events), default=0),
-                    "enforced_timeout_seconds": timeout, "total_process_memory_bytes": None, "physical_cpu_cores_used": None},
+                  "executor_error": executor_error, "resource_telemetry": telemetry,
                   "resource_scope": "worker count and declared read buffers; not total process memory or CPU cores"}
     semantic = {"schema_version": 1, "plan_id": plan["plan_id"], "mission_id": plan["mission"].get("mission_id"),
                 "accepted": accepted, "profile": {"estimate_origin": plan["resources"]["estimate_origin"],
                   "resources": plan["resources"], "bindings": plan["bindings"], "schedule_algorithm": plan["schedule_algorithm"]},
-                "tasks": [results[key] for key in sorted(results)]}
+                "tasks": task_rows}
+    if ledger is not None:
+        semantic["model_budget"] = ledger
     write_json(directory / "semantic.json", semantic)
     write_json(directory / "observations.json", observations)
     write_json(directory / "validation.json", validation)
-    event("run_completed", accepted=accepted)
+    finished_fields = {"model_accounted": current_accounted()} if limits is not None else {}
+    event("run_completed", accepted=accepted, **finished_fields)
     if accepted:
         final_nodes = [node for node in nodes.values() if node["operation"] == "assemble_manifest"]
         if len(final_nodes) != 1:

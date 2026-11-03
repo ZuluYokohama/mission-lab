@@ -36,7 +36,8 @@ OPERATOR_CONTRACTS = {
                  "preconditions": ["declared grok model id and bounded generation parameters",
                                    "exactly one inline prompt or confined prompt file",
                                    "transport xai has an XAI_API_KEY grant, or transport fixture has a confined response file",
-                                   "request timeout is at least one second below the profile timeout"],
+                                   "request timeout is at least one second below the profile timeout",
+                                   "when a resource profile declares a model budget, that budget prices this model and the worst-case reservation fits"],
                  "postconditions": ["receipt records model, parameters, request and response hashes, reported token usage, latency, and HTTP status",
                                     "response content is stored as a hash-addressed artifact",
                                     "the API key is not recorded"],
@@ -336,7 +337,7 @@ def validate_environment_receipt(names, resources, task_id):
 
 def validate_resources(value):
     fields(value, ("schema_version", "workers", "read_buffer_bytes", "timeout_seconds", "estimate_origin"),
-           ("cost_model", "worker_env"), "resources")
+           ("cost_model", "worker_env", "model_budget"), "resources")
     _version(value["schema_version"], "resources")
     integer(value["workers"], 1, 8, "workers")
     integer(value["read_buffer_bytes"], 1, 2**40, "read_buffer_bytes")
@@ -355,6 +356,9 @@ def validate_resources(value):
     result = {**value, "cost_model": dict(costs)}
     if "worker_env" in value:
         result["worker_env"] = validate_worker_env(value["worker_env"])
+    if "model_budget" in value:
+        from .budget import validate_model_budget
+        result["model_budget"] = validate_model_budget(value["model_budget"])
     return result
 
 
@@ -440,7 +444,7 @@ def validate_node_record(node):
     base = ("id", "operation", "depends_on", "outputs", "state_reads", "state_writes")
     if operation == "llm:grok":
         fields(node, base + ("model", "max_output_tokens", "temperature", "timeout_seconds", "max_response_bytes", "transport"),
-               ("input_id", "prompt", "fixture_id"), "node")
+               ("input_id", "prompt", "fixture_id", "max_input_tokens"), "node")
         from .grok import normalize_llm_fields
         normalize_llm_fields(node)
     else:

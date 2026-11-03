@@ -53,6 +53,8 @@ def normalize_llm_fields(node):
     if not isinstance(model, str) or MODEL_ID.fullmatch(model) is None:
         raise LabError("llm:grok model must be a grok model id")
     integer(node["max_output_tokens"], 1, MAX_OUTPUT_TOKENS, "max_output_tokens")
+    if "max_input_tokens" in node:
+        integer(node["max_input_tokens"], 1, MAX_USAGE_TOKENS, "max_input_tokens")
     node["temperature"] = _temperature(node["temperature"])
     timeout = node["timeout_seconds"]
     if isinstance(timeout, bool) or type(timeout) not in (int, float) or not math.isfinite(timeout):

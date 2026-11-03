@@ -40,11 +40,29 @@ A unit test may pass `urllib_chat` a loopback `http://127.0.0.1` URL. That argum
 
 ## Resource profile and estimates
 
-Fields are `schema_version`, `workers`, `read_buffer_bytes`, `timeout_seconds`, `estimate_origin`, and optional `cost_model` and `worker_env`. Worker slots are 1..8. Read-buffer reservation bytes are 1..2^40. Timeout seconds must be finite, positive and at most 3,600. Cost origins are `injected_fixture` or `measured`; measured profiles require explicit supplied costs.
+Fields are `schema_version`, `workers`, `read_buffer_bytes`, `timeout_seconds`, `estimate_origin`, and optional `cost_model`, `worker_env`, and `model_budget`. Worker slots are 1..8. Read-buffer reservation bytes are 1..2^40. Timeout seconds must be finite, positive and at most 3,600. Cost origins are `injected_fixture` or `measured`; measured profiles require explicit supplied costs.
 
-The cost model declares whole, stream and reference nanoseconds per byte plus fixed task nanoseconds. Defaults are injected illustrative costs. Supplying a measured label does not independently authenticate the measurement; provenance must substantiate any scientific interpretation. Estimated schedule duration and actual wall-clock observations remain separate fields.
+The cost model declares whole, stream and reference nanoseconds per byte plus fixed task nanoseconds. Defaults are injected illustrative costs. Supplying a measured label does not independently authenticate the measurement; provenance must substantiate any scientific interpretation. Estimated schedule duration and actual wall-clock observations remain separate fields. The nanosecond cost model is not a model-call budget.
 
 The executor bounds its worker count and sum of registered read-buffer reservations. Whole-file reservations depend on input size; streaming and reference paths have registered chunk bounds. An `llm:grok` reservation is only the declared prompt or fixture bytes. These bounds exclude interpreter and library overhead, incidental metadata/state allocations, process RSS, OS caches, cores, GPU allocations, response bytes beyond the separate cap, and energy.
+
+## Model budget
+
+`model_budget` is optional. A profile that omits it does not reserve, settle, or record model requests, tokens, or spend. The duration `cost_model` is unchanged in that case.
+
+When present, the object is closed. Required fields are `max_requests` (0..10,000), `max_spend` (0..10^18), `unit`, and `prices`. Optional caps are `max_output_tokens` and `max_total_tokens` (each 0..10^12). An omitted token cap is not enforced. `unit` matches `^[a-z][a-z0-9_-]{0,31}$`. It names the fixed-point unit the profile is counting. It is not a currency conversion, a market rate, or an invoice.
+
+`prices` contains 1..32 model ids. Each row is `input`, `output`, and `per`. The prices are integers from 0 to 10^12. `per` is `token` or `million`. There is no built-in price. A model id that an `llm:grok` task uses and that the table does not list fails planning. For `per` `million`, each side is `ceil(tokens * price / 1_000_000)` using integer arithmetic. The two sides are summed. A partial million is not free. The sum must fit in 0..10^18 or planning fails.
+
+An `llm:grok` task reserves one request. Its input-token bound is `max_input_tokens` when the node declares it, and otherwise the UTF-8 byte length of the inline prompt or the declared size of the prompt file. One token per byte is a reservation ceiling, not a tokenizer measurement. A declared `max_input_tokens` must be an integer from 1 to 10^9 and at least that byte length; a smaller declaration is rejected. Output tokens reserve `max_output_tokens`. Total tokens reserve the sum of those two bounds. Spend reserves the price of that input bound and that output bound. Other operations reserve zeros. The reservation is stored on the binding.
+
+Planning admits a task only when its own reservation fits every declared cap, including equality. It then admits a schedule only when the sum of those reservations still fits, because settlement can only reduce a hold. A profile that cannot reserve every task has no execution plan. The errors name the task or the model budget. No partial plan is emitted.
+
+Before each launch the executor adds the task reservation to the running accounted total, which is settled usage plus holds still outstanding. If that projection exceeds a cap, the task is not started. Its status is `blocked`, the account state is `refused`, and the error names the task. The hold is not charged. After a successful receipt, provider-reported `prompt_tokens`, `completion_tokens`, and `total_tokens` are priced with the same rule. Each of those counts, the derived spend, and the one request must be less than or equal to the reservation. The hold is then replaced by that actual usage. If the receipt exceeds the reservation, or the task fails, times out, or is aborted after launch, the receipt is not settled and the worst-case hold stays charged. Accounted cost therefore does not record a usage figure above the hold, and it does not drop a launched call to zero when no fitting receipt exists. A launch that fails before the process starts releases the hold.
+
+The run records the reservation, the actual usage when settled, and the account state on each task and on each launched observation. Events carry the running accounted total. The semantic record stores the caps, the profile prices, per-task rows, and reserved, actual, accounted, and remaining totals. Remaining is the cap minus accounted, for each declared cap. The report renders those rows. Replay recomputes the reservation from the plan, recomputes settled usage from the archived receipt, and walks the event ledger. A mismatch fails. Replay does not call the network and does not supply a missing usage figure.
+
+This ledger is an accounting bound on declared reservations and provider-reported counts. It is not a provider invoice, a payment authorization, a measurement of energy, or proof that a charged hold matches an unseen bill. A call that fails before a receipt, or whose reported usage exceeds the reservation, keeps the hold and does not reconstruct a larger usage number.
 
 ## Worker environment
 

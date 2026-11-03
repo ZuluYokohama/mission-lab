@@ -4,7 +4,7 @@ This is a technical extension map. It is not an executable specification. The re
 
 ## Registered remote call
 
-`llm:grok`, candidate `chat_v1`, is a scheduler and receipt boundary. The mission names a model id and bounds. Transport `xai` sends one non-streaming user message to `https://api.x.ai/v1/chat/completions`. Transport `fixture` substitutes a declared file. The evidence is the request hash, the response hash, provider-reported token counts, latency, HTTP status, and a hash-addressed copy of the assistant text. None of those fields measures the variables in the tables below. Replay checks the archive and does not repeat the call.
+`llm:grok`, candidate `chat_v1`, is a scheduler and receipt boundary. The mission names a model id and bounds. Transport `xai` sends one non-streaming user message to `https://api.x.ai/v1/chat/completions`. Transport `fixture` substitutes a declared file. The evidence is the request hash, the response hash, provider-reported token counts, latency, HTTP status, and a hash-addressed copy of the assistant text. None of those fields measures the variables in the tables below. A resource profile may declare a model budget that prices a worst-case reservation and, when the receipt fits, the provider-reported counts. The prices and the unit come from that profile. The ledger is not a measurement of joules, weight bytes, or a market rate, and a profile that omits it does not create one. Replay checks the archive and does not repeat the call.
 
 ## Executable representation
 
