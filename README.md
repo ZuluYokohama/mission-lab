@@ -24,7 +24,7 @@ python -B -m research.mission_lab_v0_1 inspect --root research/mission_lab_v0_1/
 
 Writing commands require a fresh directory under `research/mission_lab_v0_1/evidence/`. Reusing an output directory is refused. Generated evidence is local and ignored by Git: it can contain filesystem paths, PIDs, executable locations and timestamps. Inspect it before sharing.
 
-The other commands are `plan`, `run` and `replan`; use their `--help` for arguments. Missions accept 1–8 input files and a closed graph of at most 64 nodes. The public derivative confines file inputs to the checkout and confines metadata inspection to package fixtures. Broader archive adapters require a separately reviewed change.
+The other commands are `plan`, `run` and `replan`; use their `--help` for arguments. Missions accept 1–8 input files and a closed graph of at most 2048 nodes. The public derivative confines file inputs to the checkout and confines metadata inspection to package fixtures. Broader archive adapters require a separately reviewed change.
 
 ## Demonstration and boundaries
 
