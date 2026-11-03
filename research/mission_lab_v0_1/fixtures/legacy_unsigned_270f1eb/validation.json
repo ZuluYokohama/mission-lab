@@ -1,0 +1,70 @@
+{
+  "all_registered_tasks_succeeded": true,
+  "executor_error": null,
+  "final_sources_and_inputs_match": true,
+  "identity_error": null,
+  "obligations": [
+    {
+      "checks": [
+        "registered operation and revision",
+        "declared resource reservations",
+        "dependency and ownership"
+      ],
+      "functional_check": "exact hash and byte count against declared input and sequential reference",
+      "requirement_ids": [
+        "identity"
+      ],
+      "requirement_semantics": "prose retained for human alignment; not automatically assessed",
+      "task_id": "hash:alpha"
+    },
+    {
+      "checks": [
+        "registered operation and revision",
+        "declared resource reservations",
+        "dependency and ownership"
+      ],
+      "functional_check": "exact hash and byte count against declared input and sequential reference",
+      "requirement_ids": [
+        "identity"
+      ],
+      "requirement_semantics": "prose retained for human alignment; not automatically assessed",
+      "task_id": "manifest"
+    },
+    {
+      "checks": [
+        "registered operation and revision",
+        "declared resource reservations",
+        "dependency and ownership"
+      ],
+      "functional_check": "exact hash and byte count against declared input and sequential reference",
+      "requirement_ids": [
+        "identity"
+      ],
+      "requirement_semantics": "prose retained for human alignment; not automatically assessed",
+      "task_id": "reference:alpha"
+    },
+    {
+      "checks": [
+        "registered operation and revision",
+        "declared resource reservations",
+        "dependency and ownership"
+      ],
+      "functional_check": "exact hash and byte count against declared input and sequential reference",
+      "requirement_ids": [
+        "identity"
+      ],
+      "requirement_semantics": "prose retained for human alignment; not automatically assessed",
+      "task_id": "verify:alpha"
+    }
+  ],
+  "passed": true,
+  "resource_scope": "worker count and declared read buffers; not total process memory or CPU cores",
+  "resource_telemetry": {
+    "enforced_timeout_seconds": 60.0,
+    "peak_reserved_buffer_bytes": 3,
+    "peak_workers_observed": 1,
+    "physical_cpu_cores_used": null,
+    "total_process_memory_bytes": null
+  },
+  "sources_and_inputs_rechecked_before_launch": true
+}

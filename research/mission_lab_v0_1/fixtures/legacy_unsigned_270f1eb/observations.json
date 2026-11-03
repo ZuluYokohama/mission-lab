@@ -1,0 +1,122 @@
+[
+  {
+    "command": [
+      "/usr/bin/python3",
+      "-B",
+      "-m",
+      "research.mission_lab_v0_1.worker",
+      "--job",
+      "/tmp/legacy-src/research/mission_lab_v0_1/evidence/legacy-unsigned/private/0_job.json",
+      "--result",
+      "/tmp/legacy-src/research/mission_lab_v0_1/evidence/legacy-unsigned/private/0_worker_result.json"
+    ],
+    "duration_ns": 31917271,
+    "environment_names": [
+      "HOME",
+      "LANG",
+      "LC_ALL",
+      "PATH",
+      "PYTHONDONTWRITEBYTECODE",
+      "PYTHONUNBUFFERED"
+    ],
+    "exit_code": 0,
+    "finished_ns": 3300137616262,
+    "pid": 4331,
+    "process_creation_ns": 1222538,
+    "process_creation_started_ns": 3300104476453,
+    "reserved_buffer_bytes": 3,
+    "started_ns": 3300105698991,
+    "status": "succeeded",
+    "task_id": "reference:alpha"
+  },
+  {
+    "command": [
+      "/usr/bin/python3",
+      "-B",
+      "-m",
+      "research.mission_lab_v0_1.worker",
+      "--job",
+      "/tmp/legacy-src/research/mission_lab_v0_1/evidence/legacy-unsigned/private/1_job.json",
+      "--result",
+      "/tmp/legacy-src/research/mission_lab_v0_1/evidence/legacy-unsigned/private/1_worker_result.json"
+    ],
+    "duration_ns": 31697275,
+    "environment_names": [
+      "HOME",
+      "LANG",
+      "LC_ALL",
+      "PATH",
+      "PYTHONDONTWRITEBYTECODE",
+      "PYTHONUNBUFFERED"
+    ],
+    "exit_code": 0,
+    "finished_ns": 3300175740734,
+    "pid": 4333,
+    "process_creation_ns": 361041,
+    "process_creation_started_ns": 3300143682418,
+    "reserved_buffer_bytes": 3,
+    "started_ns": 3300144043459,
+    "status": "succeeded",
+    "task_id": "hash:alpha"
+  },
+  {
+    "command": [
+      "/usr/bin/python3",
+      "-B",
+      "-m",
+      "research.mission_lab_v0_1.worker",
+      "--job",
+      "/tmp/legacy-src/research/mission_lab_v0_1/evidence/legacy-unsigned/private/2_job.json",
+      "--result",
+      "/tmp/legacy-src/research/mission_lab_v0_1/evidence/legacy-unsigned/private/2_worker_result.json"
+    ],
+    "duration_ns": 31962866,
+    "environment_names": [
+      "HOME",
+      "LANG",
+      "LC_ALL",
+      "PATH",
+      "PYTHONDONTWRITEBYTECODE",
+      "PYTHONUNBUFFERED"
+    ],
+    "exit_code": 0,
+    "finished_ns": 3300214415148,
+    "pid": 4335,
+    "process_creation_ns": 488521,
+    "process_creation_started_ns": 3300181963761,
+    "reserved_buffer_bytes": 0,
+    "started_ns": 3300182452282,
+    "status": "succeeded",
+    "task_id": "verify:alpha"
+  },
+  {
+    "command": [
+      "/usr/bin/python3",
+      "-B",
+      "-m",
+      "research.mission_lab_v0_1.worker",
+      "--job",
+      "/tmp/legacy-src/research/mission_lab_v0_1/evidence/legacy-unsigned/private/3_job.json",
+      "--result",
+      "/tmp/legacy-src/research/mission_lab_v0_1/evidence/legacy-unsigned/private/3_worker_result.json"
+    ],
+    "duration_ns": 31696664,
+    "environment_names": [
+      "HOME",
+      "LANG",
+      "LC_ALL",
+      "PATH",
+      "PYTHONDONTWRITEBYTECODE",
+      "PYTHONUNBUFFERED"
+    ],
+    "exit_code": 0,
+    "finished_ns": 3300252722389,
+    "pid": 4337,
+    "process_creation_ns": 463470,
+    "process_creation_started_ns": 3300220562255,
+    "reserved_buffer_bytes": 0,
+    "started_ns": 3300221025725,
+    "status": "succeeded",
+    "task_id": "manifest"
+  }
+]

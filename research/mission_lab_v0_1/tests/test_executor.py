@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+import os
 import queue
 import subprocess
 from pathlib import Path
@@ -13,7 +14,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from research.mission_lab_v0_1 import core, executor, operators, planner, worker
+from research.mission_lab_v0_1 import core, executor, operators, planner, seal, worker
 
 
 class ExecutorTests(unittest.TestCase):
@@ -92,6 +93,8 @@ class ExecutorTests(unittest.TestCase):
                   for path in directory.rglob("*") if path.is_file() and path.name != "integrity.json"}
         self.assertEqual(integrity["files"], actual)
         self.assertEqual(integrity["semantic_sha256"], core.file_hash(directory / "semantic.json"))
+        self.assertEqual(integrity["signature"]["algorithm"], "hmac-sha256")
+        self.assertEqual(integrity["signature"]["key_id"], seal.key_id(seal.require_seal_key()))
         for name, digest in core.read_json(directory / "sources.json").items():
             self.assertEqual(core.file_hash(directory / "source_snapshot" / name), digest)
 
@@ -221,6 +224,167 @@ class ExecutorTests(unittest.TestCase):
                     self.assertTrue(buffers)
                     self.assertTrue(all(buffer is buffers[0] for buffer in buffers))
                     self.assertEqual(len(buffers[0]), capacity)
+
+
+    def test_worker_environment_denies_parent_secrets_and_receipts_list_names_only(self):
+        sentinel_name = "MISSION_LAB_SENTINEL_SECRET"
+        # Keep the value out of this source file. The run snapshots package
+        # sources, and the receipt scan must be able to see a real leak.
+        sentinel_value = "ml-sentinel-" + "7f3c9a1e" + "-SECRET"
+        granted_name = "MISSION_LAB_GRANTED_TOKEN"
+        granted_value = "ml-granted-" + "0c4e8b2d" + "-TOKEN"
+        self.source.write_bytes(b"abc")
+        artifact = {"id": "alpha", "path": str(self.source), "size_bytes": 3, "sha256": core.file_hash(self.source)}
+        mission = {**self.mission, "inputs": [artifact]}
+        profile = {"schema_version": 1, "workers": 2, "read_buffer_bytes": 65536, "timeout_seconds": 60,
+                   "estimate_origin": "injected_fixture",
+                   "worker_env": {"declared": [granted_name, "MISSION_LAB_UNUSED_TOKEN"],
+                                  "grants": {"hash:alpha": [granted_name]}}}
+        plan = planner.build_plan(mission, profile)
+        captured = []
+        real_popen = subprocess.Popen
+
+        def spy(command, **kwargs):
+            captured.append((command, kwargs.get("env")))
+            return real_popen(command, **kwargs)
+
+        parent = os.environ.copy()
+        parent[sentinel_name] = sentinel_value
+        parent[granted_name] = granted_value
+        parent["PYTHONSTARTUP"] = "/tmp/mission-lab-should-not-run.py"
+        parent["PYTHONUNBUFFERED"] = "0"
+        with patch.dict(os.environ, parent, clear=True), patch.object(executor.subprocess, "Popen", spy):
+            output = executor.run_plan_data(plan, self.base / "isolated_env")
+        self.assertTrue(core.read_json(output / "semantic.json")["accepted"])
+        self.assertEqual(len(captured), len(plan["graph"]))
+        observations = {row["task_id"]: row for row in core.read_json(output / "observations.json")}
+        granted_env = None
+        for command, env in captured:
+            job = core.read_json(command[command.index("--job") + 1])
+            task_id = job["node"]["id"]
+            self.assertIsInstance(env, dict)
+            self.assertNotIn(sentinel_name, env)
+            self.assertFalse(any(name.casefold() == sentinel_name.casefold() for name in env))
+            self.assertNotIn(sentinel_value, tuple(env.values()))
+            if os.name == "nt":
+                self.assertTrue(all(name == name.upper() for name in env))
+            self.assertNotIn("PYTHONSTARTUP", env)
+            self.assertNotIn("MISSION_LAB_UNUSED_TOKEN", env)
+            self.assertEqual(env.get("PYTHONUNBUFFERED"), "1")
+            self.assertEqual(env.get("PYTHONDONTWRITEBYTECODE"), "1")
+            self.assertEqual(sorted(env), observations[task_id]["environment_names"])
+            self.assertNotIn(sentinel_value, json.dumps(observations[task_id]))
+            self.assertNotIn(granted_value, json.dumps(observations[task_id]))
+            if task_id == "hash:alpha":
+                self.assertEqual(env[granted_name], granted_value)
+                granted_env = env
+            else:
+                self.assertNotIn(granted_name, env)
+            probe = subprocess.run(
+                [sys.executable, "-B", "-c", "import json,os,sys; sys.stdout.write(json.dumps(sorted(os.environ)))"],
+                env=env, capture_output=True, text=True, check=False)
+            self.assertEqual(probe.returncode, 0, probe.stderr)
+            child_names = json.loads(probe.stdout)
+            self.assertEqual(child_names, sorted(env))
+            self.assertNotIn(sentinel_name, child_names)
+            self.assertFalse(any(name.casefold() == sentinel_name.casefold() for name in child_names))
+            self.assertNotIn(sentinel_value, probe.stdout)
+        self.assertIsNotNone(granted_env)
+        granted_probe = subprocess.run(
+            [sys.executable, "-B", "-c",
+             "import os,sys; sys.stdout.write(os.environ.get('MISSION_LAB_GRANTED_TOKEN', ''))"],
+            env=granted_env, capture_output=True, text=True, check=False)
+        self.assertEqual(granted_probe.returncode, 0, granted_probe.stderr)
+        self.assertEqual(granted_probe.stdout, granted_value)
+        self.assertNotIn(sentinel_value, granted_probe.stdout)
+        for path in output.rglob("*"):
+            if path.is_file():
+                data = path.read_bytes()
+                self.assertNotIn(sentinel_value.encode(), data)
+                self.assertNotIn(granted_value.encode(), data)
+        from research.mission_lab_v0_1 import report
+        self.assertTrue(report.replay_run(output)["accepted"])
+        original_observations = (output / "observations.json").read_text(encoding="utf-8")
+        original_events = (output / "events.jsonl").read_text(encoding="utf-8")
+        original_integrity = (output / "integrity.json").read_text(encoding="utf-8")
+        rows = core.read_json(output / "observations.json")
+        events = [json.loads(line) for line in original_events.splitlines()]
+        present = [name for name in ("WINDIR", "TZ", "PATHEXT", "TMPDIR", "LC_ALL", "APPDATA", "LANG")
+                   if all(name not in row["environment_names"] for row in rows)
+                   and all(name not in (event.get("environment_names") or []) for event in events if event.get("kind") == "launched")]
+        self.assertTrue(present, "expected an allowed platform name that this run did not pass")
+        extra = present[0]
+
+        def reseal():
+            seal.reseal(output)
+
+        def restore():
+            (output / "observations.json").write_text(original_observations, encoding="utf-8", newline="\n")
+            (output / "events.jsonl").write_text(original_events, encoding="utf-8", newline="\n")
+            (output / "integrity.json").write_text(original_integrity, encoding="utf-8", newline="\n")
+
+        def contradict():
+            reseal()
+            with self.assertRaises(core.LabError) as caught:
+                report.replay_run(output)
+            self.assertIn("contradicts the launch event", str(caught.exception))
+            restore()
+
+        for row in rows:
+            if row["task_id"] == "hash:alpha":
+                row["environment_names"] = sorted(set(row["environment_names"]) | {extra})
+        (output / "observations.json").write_text(core.canonical(rows), encoding="utf-8", newline="\n")
+        contradict()
+        for event in events:
+            if event.get("kind") == "launched" and event.get("task_id") == "hash:alpha":
+                event["environment_names"] = sorted(set(event["environment_names"]) | {extra})
+        (output / "events.jsonl").write_text(
+            "".join(json.dumps(event, sort_keys=True, allow_nan=False) + "\n" for event in events),
+            encoding="utf-8", newline="\n")
+        contradict()
+        rows = core.read_json(output / "observations.json")
+        events = [json.loads(line) for line in (output / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+        for row in rows:
+            if row["task_id"] == "hash:alpha":
+                row["environment_names"] = [name for name in row["environment_names"] if name != granted_name]
+        for event in events:
+            if event.get("kind") == "launched" and event.get("task_id") == "hash:alpha":
+                event["environment_names"] = [name for name in event["environment_names"] if name != granted_name]
+        (output / "observations.json").write_text(core.canonical(rows), encoding="utf-8", newline="\n")
+        (output / "events.jsonl").write_text(
+            "".join(json.dumps(event, sort_keys=True, allow_nan=False) + "\n" for event in events),
+            encoding="utf-8", newline="\n")
+        semantic = core.read_json(output / "semantic.json")
+        (output / "report.md").write_text(report.render_report(semantic, rows), encoding="utf-8", newline="\n")
+        seal.reseal(output)
+        with self.assertRaises(core.LabError) as caught:
+            report.replay_run(output)
+        self.assertIn("omits a granted variable", str(caught.exception))
+
+    def test_missing_granted_variable_fails_before_process_start(self):
+        self.source.write_bytes(b"abc")
+        artifact = {"id": "alpha", "path": str(self.source), "size_bytes": 3, "sha256": core.file_hash(self.source)}
+        mission = {**self.mission, "inputs": [artifact]}
+        profile = {"schema_version": 1, "workers": 2, "read_buffer_bytes": 65536, "timeout_seconds": 60,
+                   "estimate_origin": "injected_fixture",
+                   "worker_env": {"declared": ["MISSION_LAB_GRANTED_TOKEN"],
+                                  "grants": {"hash:alpha": ["MISSION_LAB_GRANTED_TOKEN"]}}}
+        plan = planner.build_plan(mission, profile)
+        factory, launches = self.fake_factory()
+        parent = os.environ.copy()
+        parent.pop("MISSION_LAB_GRANTED_TOKEN", None)
+        with patch.dict(os.environ, parent, clear=True), patch.object(executor.subprocess, "Popen", factory):
+            output = executor.run_plan_data(plan, self.base / "missing_grant")
+        self.assertNotIn("hash:alpha", launches)
+        results = {row["task_id"]: row for row in core.read_json(output / "semantic.json")["tasks"]}
+        self.assertEqual(results["hash:alpha"]["status"], "failed")
+        self.assertEqual(results["hash:alpha"]["error"]["message"],
+                         "Granted worker environment variable is not set: MISSION_LAB_GRANTED_TOKEN")
+        self.assertEqual(results["verify:alpha"]["status"], "blocked")
+        self.assertIn("reference:alpha", launches)
+        self.assert_integrity(output)
+        from research.mission_lab_v0_1 import report
+        self.assertFalse(report.replay_run(output)["accepted"])
 
 
 if __name__ == "__main__":

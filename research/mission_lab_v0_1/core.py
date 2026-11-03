@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 from pathlib import Path
 
@@ -14,8 +15,8 @@ ROOT = Path(__file__).resolve().parent
 WORKSPACE = ROOT.parents[1]
 ARCHIVE = ROOT / "fixtures"
 SCHEMA = 1
-OPERATIONS = {"sha256", "reference_sha256", "verify_digest", "assemble_manifest"}
-REVISIONS = {"whole_v1": "1", "stream_v1": "1", "reference_v1": "1", "compare_v1": "1", "manifest_v1": "1"}
+OPERATIONS = {"sha256", "reference_sha256", "verify_digest", "assemble_manifest", "llm:grok", "gate"}
+REVISIONS = {"whole_v1": "1", "stream_v1": "1", "reference_v1": "1", "compare_v1": "1", "manifest_v1": "1", "chat_v1": "1", "predicate_v1": "1"}
 OPERATOR_CONTRACTS = {
     "sha256": {"schema_version": 1, "input_type": "file_artifact_ref", "output_type": "digest_record",
                "candidates": {"whole_v1": "1", "stream_v1": "1"},
@@ -30,9 +31,60 @@ OPERATOR_CONTRACTS = {
     "assemble_manifest": {"schema_version": 1, "input_type": "verified_digest_records", "output_type": "artifact_manifest",
                           "candidates": {"manifest_v1": "1"}, "preconditions": ["all input verifications succeeded"],
                           "postconditions": ["exactly one digest/size row per input"], "effects": "read dependencies; own one staged manifest"},
+    "llm:grok": {"schema_version": 1, "input_type": "prompt_text_or_file_artifact_ref", "output_type": "grok_chat_receipt",
+                 "candidates": {"chat_v1": "1"},
+                 "preconditions": ["declared grok model id and bounded generation parameters",
+                                   "exactly one inline prompt or confined prompt file",
+                                   "transport xai has an XAI_API_KEY grant, or transport fixture has a confined response file",
+                                   "request timeout is at least one second below the profile timeout",
+                                   "when a resource profile declares a model budget, that budget prices this model and the worst-case reservation fits"],
+                 "postconditions": ["receipt records model, parameters, request and response hashes, reported token usage, latency, and HTTP status",
+                                    "response content is stored as a hash-addressed artifact",
+                                    "the API key is not recorded"],
+                 "effects": "one chat completion call or one local fixture read; own one staged receipt and response artifacts"},
+    "gate": {"schema_version": 1, "input_type": "dependency_receipts", "output_type": "gate_receipt",
+             "candidates": {"predicate_v1": "1"},
+             "preconditions": ["one or more direct dependencies",
+                               "a closed predicate over those receipts",
+                               "no read-buffer reservation and no model-budget reservation"],
+             "postconditions": ["receipt outcome is pass, fail, indeterminate, or pending",
+                                "fail, indeterminate, and pending do not launch downstream nodes"],
+             "effects": "controller evaluates the predicate in-process; no worker and no arbitrary code"},
 }
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$")
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
+ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+# Copied only when already set. These names let CPython start and import on the
+# two CI platforms. They are not a sandbox, a credential set, or a TLS trust store.
+_POSIX_PLATFORM_ENV = frozenset({
+    "HOME", "LANG", "LC_ALL", "LC_CTYPE", "PATH", "TMPDIR", "TZ",
+    "PYTHONCOERCECLOCALE", "PYTHONHOME", "PYTHONIOENCODING", "PYTHONNOUSERSITE",
+    "PYTHONPATH", "PYTHONSAFEPATH", "PYTHONUTF8",
+})
+_WINDOWS_PLATFORM_ENV = frozenset({
+    "APPDATA", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "PATH", "PATHEXT",
+    "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP", "USERPROFILE", "WINDIR",
+    "PYTHONCOERCECLOCALE", "PYTHONHOME", "PYTHONIOENCODING",
+    "PYTHONLEGACYWINDOWSFSENCODING", "PYTHONLEGACYWINDOWSSTDIO",
+    "PYTHONNOUSERSITE", "PYTHONPATH", "PYTHONSAFEPATH", "PYTHONUTF8",
+})
+FORCED_WORKER_ENV = {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1"}
+# Controller secrets. Refusing these names is not a file-permission check.
+CONTROLLER_KEY_ENV = frozenset({
+    "MISSION_LAB_SEAL_KEY",
+    "MISSION_LAB_SEAL_KEY_FILE",
+    "MISSION_LAB_APPROVER_KEY",
+    "MISSION_LAB_APPROVER_KEY_FILE",
+    "MISSION_LAB_APPROVER_KEY_DIR",
+})
+_RESERVED_ENV_NAMES = _POSIX_PLATFORM_ENV | _WINDOWS_PLATFORM_ENV | frozenset(FORCED_WORKER_ENV) | CONTROLLER_KEY_ENV
+_MAX_DECLARED_ENV = 32
+_MAX_ENV_GRANTS = 64
+# Closed graphs for agent-sized task sets: the 25 hash/reference/verify/manifest
+# nodes of an 8-input mission, plus about two thousand additional llm:grok nodes.
+# A long chain makes ancestor checks quadratic; this cap keeps that work bounded.
+# It is not a measured throughput limit. Inputs stay 1..8.
+MAX_GRAPH_NODES = 2048
 
 
 class LabError(ValueError):
@@ -147,9 +199,174 @@ def new_output(requested, *, evidence_root=None):
     return output
 
 
+def platform_env_names():
+    """Sorted start-variable names for this operating system."""
+    names = _WINDOWS_PLATFORM_ENV if os.name == "nt" else _POSIX_PLATFORM_ENV
+    return tuple(sorted(names))
+
+
+def _env_name(name):
+    if not isinstance(name, str) or ENV_NAME.fullmatch(name) is None:
+        raise LabError("Invalid worker environment variable name")
+    return name
+
+
+def _reject_controller_key(name):
+    """Case-folded. A Windows case variant is not a way to copy the seal key."""
+    if isinstance(name, str) and name.casefold() in {item.casefold() for item in CONTROLLER_KEY_ENV}:
+        raise LabError("Controller key variable cannot be granted: " + name)
+
+
+def validate_worker_env(value):
+    """Accept declared names and per-task grants. Values are not a schema field."""
+    fields(value, ("declared", "grants"), label="worker_env")
+    declared = value["declared"]
+    if not isinstance(declared, list) or len(declared) > _MAX_DECLARED_ENV:
+        raise LabError("worker_env declared must be a list of at most 32 names")
+    reserved = {name.casefold() for name in _RESERVED_ENV_NAMES}
+    names, seen = [], set()
+    for name in declared:
+        _env_name(name)
+        _reject_controller_key(name)
+        folded = name.casefold()
+        if folded in reserved:
+            raise LabError("Worker environment variable is platform-controlled and cannot be granted: " + name)
+        if folded in seen:
+            raise LabError("Duplicate worker environment variable: " + name)
+        seen.add(folded)
+        names.append(name)
+    grants = value["grants"]
+    if not isinstance(grants, dict) or len(grants) > _MAX_ENV_GRANTS:
+        raise LabError("worker_env grants must be an object of at most 64 tasks")
+    normalized, declared_set = {}, set(names)
+    for task_id, requested in grants.items():
+        identifier(task_id, "worker_env task id")
+        if not isinstance(requested, list) or not requested or len(requested) > _MAX_DECLARED_ENV:
+            raise LabError("worker_env grant must be a nonempty list of at most 32 names")
+        grant_names, grant_seen = [], set()
+        for name in requested:
+            _env_name(name)
+            if name not in declared_set:
+                raise LabError("Undeclared worker environment variable: " + name)
+            if name in grant_seen:
+                raise LabError("Duplicate worker environment variable: " + name)
+            grant_seen.add(name)
+            grant_names.append(name)
+        normalized[task_id] = sorted(grant_names)
+    return {"declared": sorted(names), "grants": normalized}
+
+
+def check_worker_env_tasks(resources, task_ids):
+    """Reject grants that name a task the executable graph does not contain."""
+    worker_env = resources.get("worker_env") if isinstance(resources, dict) else None
+    if not worker_env:
+        return
+    known = set(task_ids)
+    for task_id in worker_env["grants"]:
+        if task_id not in known:
+            raise LabError("Worker environment grant names an unknown task: " + task_id)
+
+
+def granted_names(resources, task_id):
+    worker_env = resources.get("worker_env") if isinstance(resources, dict) else None
+    if not isinstance(worker_env, dict):
+        return ()
+    grants = worker_env.get("grants")
+    if not isinstance(grants, dict):
+        return ()
+    names = grants.get(task_id, ())
+    return tuple(names) if isinstance(names, list) else ()
+
+
+def _passed_name(name, windows):
+    """Child and receipt spelling. Windows reports environment names in uppercase."""
+    return name.upper() if windows else name
+
+
+def _lookup_env(parent, name, windows, *, required):
+    """Return one string value. Windows matches names without regard to case."""
+    if windows:
+        matched = [value for key, value in parent.items() if isinstance(key, str) and key.casefold() == name.casefold()]
+    elif name in parent:
+        matched = [parent[name]]
+    else:
+        matched = []
+    if not matched:
+        if required:
+            raise LabError("Granted worker environment variable is not set: " + name)
+        return None
+    if any(not isinstance(value, str) for value in matched):
+        if required:
+            raise LabError("Granted worker environment variable is not a string: " + name)
+        return None
+    distinct = set(matched)
+    if len(distinct) != 1:
+        raise LabError("Worker environment variable has conflicting values under different case: " + name)
+    return matched[0]
+
+
+def worker_environment(resources, task_id, parent=None):
+    """Build one worker environment. Unlisted parent variables are not copied."""
+    if parent is None:
+        parent = os.environ
+    return _worker_environment(resources, task_id, parent, windows=os.name == "nt")
+
+
+def _worker_environment(resources, task_id, parent, windows):
+    if not hasattr(parent, "items"):
+        raise LabError("Worker environment parent must be a mapping")
+    platform_names = _WINDOWS_PLATFORM_ENV if windows else _POSIX_PLATFORM_ENV
+    env = {}
+    for name in sorted(platform_names):
+        value = _lookup_env(parent, name, windows, required=False)
+        if value is not None:
+            env[_passed_name(name, windows)] = value
+    worker_env = resources.get("worker_env") if isinstance(resources, dict) else None
+    if worker_env:
+        declared = worker_env.get("declared")
+        if not isinstance(declared, list):
+            raise LabError("worker_env declared must be a list of at most 32 names")
+        declared_folded = {item.casefold(): item for item in declared if isinstance(item, str)}
+        reserved = {item.casefold() for item in _RESERVED_ENV_NAMES}
+        for name in granted_names(resources, task_id):
+            _reject_controller_key(name)
+            if not isinstance(name, str) or name.casefold() in reserved:
+                raise LabError("Worker environment variable is platform-controlled and cannot be granted: " + str(name))
+            if name.casefold() not in declared_folded:
+                raise LabError("Undeclared worker environment variable: " + name)
+            env[_passed_name(name, windows)] = _lookup_env(parent, name, windows, required=True)
+    for name, value in FORCED_WORKER_ENV.items():
+        env[_passed_name(name, windows)] = value
+    return env
+
+
+def validate_environment_receipt(names, resources, task_id):
+    """Check a name-only receipt. Comparison folds case so Windows records replay elsewhere."""
+    if not isinstance(names, list) or any(not isinstance(name, str) for name in names) or names != sorted(names) or len(names) != len(set(names)):
+        raise LabError("Worker environment receipt must be sorted unique names")
+    if len({name.casefold() for name in names}) != len(names):
+        raise LabError("Worker environment receipt repeats a name under another case")
+    for name in names:
+        if ENV_NAME.fullmatch(name) is None:
+            raise LabError("Malformed worker environment name")
+    granted = tuple(granted_names(resources, task_id))
+    allowed = {name.casefold() for name in _POSIX_PLATFORM_ENV | _WINDOWS_PLATFORM_ENV | frozenset(FORCED_WORKER_ENV) | set(granted)}
+    present = {name.casefold() for name in names}
+    extra = sorted(name for name in names if name.casefold() not in allowed)
+    if extra:
+        raise LabError("Worker environment receipt names an ungranted variable: " + extra[0])
+    missing = sorted(name for name in granted if name.casefold() not in present)
+    if missing:
+        raise LabError("Worker environment receipt omits a granted variable: " + missing[0])
+    omitted = sorted(name for name in FORCED_WORKER_ENV if name.casefold() not in present)
+    if omitted:
+        raise LabError("Worker environment receipt omits a controller-forced variable: " + omitted[0])
+    return names
+
+
 def validate_resources(value):
     fields(value, ("schema_version", "workers", "read_buffer_bytes", "timeout_seconds", "estimate_origin"),
-           ("cost_model",), "resources")
+           ("cost_model", "worker_env", "model_budget"), "resources")
     _version(value["schema_version"], "resources")
     integer(value["workers"], 1, 8, "workers")
     integer(value["read_buffer_bytes"], 1, 2**40, "read_buffer_bytes")
@@ -165,7 +382,13 @@ def validate_resources(value):
         integer(number, 1, 10**12, key)
     if value["estimate_origin"] == "measured" and "cost_model" not in value:
         raise LabError("Measured profiles require an explicit cost_model; defaults are injected")
-    return {**value, "cost_model": dict(costs)}
+    result = {**value, "cost_model": dict(costs)}
+    if "worker_env" in value:
+        result["worker_env"] = validate_worker_env(value["worker_env"])
+    if "model_budget" in value:
+        from .budget import validate_model_budget
+        result["model_budget"] = validate_model_budget(value["model_budget"])
+    return result
 
 
 def default_resources():
@@ -240,19 +463,39 @@ def load_mission(path):
     return validate_mission(read_json(path), Path(path).resolve().parent)
 
 
+def validate_node_record(node):
+    """Closed node schema. llm:grok scalars are canonicalized in place."""
+    if not isinstance(node, dict):
+        raise LabError("node must be an object")
+    operation = node.get("operation")
+    if not isinstance(operation, str) or operation not in OPERATIONS:
+        raise LabError("Unsupported operation")
+    base = ("id", "operation", "depends_on", "outputs", "state_reads", "state_writes")
+    if operation == "llm:grok":
+        fields(node, base + ("model", "max_output_tokens", "temperature", "timeout_seconds", "max_response_bytes", "transport"),
+               ("input_id", "prompt", "fixture_id", "max_input_tokens"), "node")
+        from .grok import normalize_llm_fields
+        normalize_llm_fields(node)
+    elif operation == "gate":
+        fields(node, base + ("predicate",), (), "node")
+        from .gates import normalize_predicate
+        node["predicate"] = normalize_predicate(node["predicate"])
+    else:
+        fields(node, base, ("input_id",), "node")
+    return node
+
+
 def validate_graph(graph, inputs):
-    if not isinstance(graph, list) or not 1 <= len(graph) <= 64:
-        raise LabError("Graph requires 1..64 nodes")
+    if not isinstance(graph, list) or not 1 <= len(graph) <= MAX_GRAPH_NODES:
+        raise LabError("Graph requires 1.." + str(MAX_GRAPH_NODES) + " nodes")
     known_inputs = {item["id"] for item in inputs}
     nodes, writers = {}, {}
     for node in graph:
-        fields(node, ("id", "operation", "depends_on", "outputs", "state_reads", "state_writes"), ("input_id",), "node")
+        validate_node_record(node)
         nid = identifier(node["id"], "node id")
         if nid in nodes:
             raise LabError("Duplicate node id")
         nodes[nid] = node
-        if not isinstance(node["operation"], str) or node["operation"] not in OPERATIONS:
-            raise LabError("Unsupported operation")
         for key in ("depends_on", "outputs", "state_reads", "state_writes"):
             strings(node[key], key)
             if len(set(node[key])) != len(node[key]):
@@ -264,10 +507,14 @@ def validate_graph(graph, inputs):
             if output in writers:
                 raise LabError("Conflicting output/state writers")
             writers[output] = nid
-        if node["operation"] != "assemble_manifest" and (not isinstance(node.get("input_id"), str) or node.get("input_id") not in known_inputs):
+        if node["operation"] == "assemble_manifest":
+            if "input_id" in node:
+                raise LabError("Manifest has no direct input file")
+        elif node["operation"] == "gate":
+            if "input_id" in node:
+                raise LabError("Gate has no direct input file")
+        elif node["operation"] != "llm:grok" and (not isinstance(node.get("input_id"), str) or node.get("input_id") not in known_inputs):
             raise LabError("Unknown graph input")
-        if node["operation"] == "assemble_manifest" and "input_id" in node:
-            raise LabError("Manifest has no direct input file")
     remaining, ordered = set(nodes), []
     while remaining:
         ready = sorted(nid for nid in remaining if set(nodes[nid]["depends_on"]) <= set(ordered))
@@ -294,6 +541,12 @@ def validate_graph(graph, inputs):
         if op == "assemble_manifest":
             if not deps or any(nodes[d]["operation"] != "verify_digest" for d in deps):
                 raise LabError("Manifest requires verified artifacts")
+        if op == "llm:grok":
+            from .grok import validate_llm_wiring
+            validate_llm_wiring(node, nodes, inputs)
+        if op == "gate":
+            from .gates import validate_gate_wiring
+            validate_gate_wiring(node, nodes)
         expected_reads = sorted(nodes[d]["outputs"][0] for d in deps)
         if sorted(node["state_reads"]) != expected_reads:
             raise LabError("State interfaces mismatch dependency outputs")
@@ -312,6 +565,9 @@ def source_manifest():
     for path in sorted(ROOT.rglob("*")):
         relative = path.relative_to(ROOT)
         if set(relative.parts) & {"evidence", "__pycache__", ".pytest_cache"}:
+            continue
+        # Retained pre-change run used to test legacy replay. It is not package source.
+        if "legacy_unsigned_270f1eb" in relative.parts:
             continue
         if path.is_file():
             if has_link(path):

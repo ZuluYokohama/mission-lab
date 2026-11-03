@@ -1,0 +1,34 @@
+{
+  "executable": "/usr/bin/python3",
+  "platform": "Linux-6.12.94+-x86_64-with-glibc2.39",
+  "python_version": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+  "resource_contract": "registered worker slots and explicit input buffers; an llm:grok task reserves only declared prompt or fixture bytes and caps the response separately; a gate reserves neither a read buffer nor a model budget and is evaluated by the controller; controller integrity checks, process overhead, RSS, cores and energy are outside this reservation",
+  "schema_version": 1,
+  "started_at_utc": "2026-11-03T04:36:22.279934+00:00",
+  "worker_environment": {
+    "default": "deny",
+    "forced_names": [
+      "PYTHONDONTWRITEBYTECODE",
+      "PYTHONUNBUFFERED"
+    ],
+    "note": "Workers receive platform_names when those variables are set, the forced interpreter flags, and resource-profile grants for that task. Other controller variables are not passed. Values are not recorded.",
+    "platform_names": [
+      "HOME",
+      "LANG",
+      "LC_ALL",
+      "LC_CTYPE",
+      "PATH",
+      "PYTHONCOERCECLOCALE",
+      "PYTHONHOME",
+      "PYTHONIOENCODING",
+      "PYTHONNOUSERSITE",
+      "PYTHONPATH",
+      "PYTHONSAFEPATH",
+      "PYTHONUTF8",
+      "TMPDIR",
+      "TZ"
+    ],
+    "schema_version": 1,
+    "values_recorded": false
+  }
+}
