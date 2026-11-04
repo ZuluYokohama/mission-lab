@@ -26,6 +26,8 @@ python -B -m research.mission_lab_v0_1 inspect --root research/mission_lab_v0_1/
 
 Writing commands require a fresh directory under `research/mission_lab_v0_1/evidence/`. Reusing an output directory is refused. Generated evidence is local and ignored by Git: it can contain filesystem paths, PIDs, executable locations and timestamps. Inspect it before sharing.
 
+The same commands are available to a remote MCP client through [the Streamable HTTP adapter](docs/REMOTE_MCP.md). That adapter is outside the controller package. It does not add an operator or a runtime dependency.
+
 The other commands are `plan`, `run`, `replan`, and `resume`; use their `--help` for arguments. `resume` starts a new run of a sealed plan after an approval file is supplied. Without approver key ids on the gate, that file is an approver id and a timestamp and is not authenticated. A gate that lists approver key ids stays pending until the record's HMAC matches one of those keys. The seal key file above is local and gitignored; do not commit it. Missions accept 1–8 input files and a closed graph of at most 2048 nodes. The public derivative confines file inputs to the checkout and confines metadata inspection to package fixtures. Broader archive adapters require a separately reviewed change.
 
 ## Demonstration and boundaries

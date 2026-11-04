@@ -46,4 +46,6 @@ Repository workflow documents and configuration outside the package do not enter
 
 ## Scope of development
 
+`tools/mission_lab_mcp.py` is a Streamable HTTP adapter for those same commands. It lives outside `research/mission_lab_v0_1`, so it is not part of the package source identity. See [Remote MCP](REMOTE_MCP.md).
+
 The current operations audit file bytes. No model execution, accelerator benchmark or new runtime dependency belongs in routine validation. Changes to registered operations, effects, limits or acceptance criteria need an explicit contract change and evidence for that change. See the [roadmap](ROADMAP.md) for deferred work.

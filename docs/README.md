@@ -8,6 +8,7 @@ Start with the repository [README](../README.md) for scope, licensing and runnab
 | Understand the study procedure and evidence records | [Protocol](../research/mission_lab_v0_1/PROTOCOL.md) |
 | See the implementation graph | [Architecture](../research/mission_lab_v0_1/ARCHITECTURE.mmd) |
 | Change and test the code | [Development](DEVELOPMENT.md) and [contribution guide](../CONTRIBUTING.md) |
+| Call the same controller from Cursor over HTTP | [Remote MCP](REMOTE_MCP.md) |
 | Review and prepare a release | [Review and release](REVIEW_AND_RELEASE.md) |
 | Configure hosting and paid review integration | [Repository setup](REPOSITORY_SETUP.md) |
 | Check observed results and unresolved gaps | [Validation](../VALIDATION.md) and [known issues](../KNOWN_ISSUES.md) |
