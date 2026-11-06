@@ -87,7 +87,12 @@ assert len(_ASSET_MODEL) == len(ASSETS)
 _N_EDGES = len(EDGES)
 _STALK_VALUES = 4 * _N_EDGES  # length of the edge-major alpha_coexact and b_harm arrays
 _ALPHA_SIGMA = 0.1
-_CURL_SPIKE_FACTOR = 8.0
+# A curl spike turns each of the edge's four baseline samples x into
+# copysign(floor + gain * |x|, x). Every component is then at least 0.8, so the edge norm
+# is at least 1.6 and the total norm exceeds HIGH_CURL_THRESHOLD on every spike frame (a
+# plain x8 scaling would leave the edge norm near the threshold and flicker the flag).
+_CURL_SPIKE_FLOOR = 0.8
+_CURL_SPIKE_GAIN = 8.0
 # lambda_2 is an Ornstein-Uhlenbeck walk. Each step keeps 95% of its distance from the
 # target (reversion speed about 0.5 per second), and the stationary spread is 10% of the
 # target: 0.02 around 0.2 normally, 0.002 around 0.02 during a fragmented dip.
@@ -209,8 +214,8 @@ class MockFeedSource(FeedSource):
 
     Magnitudes: per-step returns are about 1e-4 (a few percent over 6.5 hours), quote
     spreads are 1 to 5 bps, `alpha_coexact` components are N(0, 0.1) so the baseline
-    norm is about 0.85 against the 1.5 threshold, and a x8 curl spike on one edge lifts
-    the norm above it in roughly two thirds of the spike's frames.
+    norm is about 0.85 against the 1.5 threshold, and a curl spike on one edge lifts the
+    norm above it on every frame of the spike (see `_CURL_SPIKE_FLOOR`).
     """
 
     def __init__(self, seed: int, start_ns: int) -> None:
@@ -298,7 +303,9 @@ class MockFeedSource(FeedSource):
         for e, schedule in enumerate(self._curl):
             if schedule.active(t_ns):
                 stalks = edge_slice(e)
-                alpha[stalks] = [x * _CURL_SPIKE_FACTOR for x in alpha[stalks]]
+                alpha[stalks] = [
+                    math.copysign(_CURL_SPIKE_FLOOR + _CURL_SPIKE_GAIN * abs(x), x) for x in alpha[stalks]
+                ]
         alpha_coexact = tuple([_round_signal(x) for x in alpha])
 
         target = _LAMBDA2_FRAGMENTED_MEAN if self._fragmented.active(t_ns) else _LAMBDA2_MEAN

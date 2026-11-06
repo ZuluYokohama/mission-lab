@@ -5,6 +5,7 @@ import pytest
 
 from stonx_chart.feed.records import (
     ASSETS,
+    EDGES,
     FLAG_ERROR_317,
     FLAG_HALT,
     REGIME_FRAGMENTED,
@@ -22,6 +23,8 @@ from stonx_chart.feed.sources import (
     STEP_NS,
     MockFeedSource,
     SimClock,
+    _CURL,
+    _Schedule,
 )
 
 S = 1_000_000_000
@@ -153,6 +156,20 @@ def test_regime_flags_consistent(frames_600):
     # Outside the scheduled events the baseline stays in regime: the mock is not permanently flagged.
     quiet = [f for f in frames_600 if f.regime_flags == 0]
     assert len(quiet) > 0.8 * len(frames_600)
+
+
+def test_high_curl_holds_through_every_spike():
+    recs = MockFeedSource(7, START).advance(START + 1200 * S)
+    frames = [r for r in recs if isinstance(r, SignalFrame)]
+    spikes = [_Schedule(7, _CURL, e) for e in range(len(EDGES))]
+    inside = 0
+    for f in frames:
+        t_ns = f.epoch_ns - START
+        in_spike = any(s.active(t_ns) for s in spikes)
+        inside += in_spike
+        assert bool(f.regime_flags & REGIME_HIGH_CURL) == in_spike, f"frame {f.sequence} at {t_ns / S:.1f} s"
+    # Every edge spikes twice in 1200 s (about 20 frames per spike), so the check is not vacuous.
+    assert inside >= 18 * 2 * 15
 
 
 def test_bharm_zero_without_holonomy_flag(frames_600):
