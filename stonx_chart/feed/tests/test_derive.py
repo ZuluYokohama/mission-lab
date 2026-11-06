@@ -440,6 +440,66 @@ def test_eviction_removes_old_markers_and_points():
     assert all(op["type"] in ("overlay.remove", "series.points") for op in ops)
 
 
+class ScanCountingDict(dict):
+    """A dict that counts whole-dict iterations, to prove a code path never scans it."""
+
+    scans = 0
+
+    def __iter__(self):
+        self.scans += 1
+        return super().__iter__()
+
+    def keys(self):
+        self.scans += 1
+        return super().keys()
+
+    def values(self):
+        self.scans += 1
+        return super().values()
+
+    def items(self):
+        self.scans += 1
+        return super().items()
+
+
+def test_eviction_does_not_scan_live_overlays():
+    deriver = OverlayDeriver(ASSET, START_MS, window_s=60)
+    # 2,000 reset markers (one per millisecond from 5 s) and 500 closed bands at 6-7 s: all live.
+    feed(deriver, [quote(ASSET, 5.0 + i / 1000, 99.0, 100.0, flags=FLAG_ERROR_317) for i in range(2000)])
+    feed(deriver, [frame(6.0 + (i // 2) / 1000, flags=REGIME_FRAGMENTED if i % 2 == 0 else 0) for i in range(1000)])
+    feed(deriver, [frame(8.0, flags=REGIME_HOLONOMY_SPIKE)])  # an open band: never evicted
+    live = len(deriver.overlays())
+    assert live == len(EXPECTED_INITIAL) + 2000 + 500 + 1
+
+    scanning = ScanCountingDict(deriver._overlays)
+    deriver._overlays = scanning
+    for t_s in (9.0, 30.0, 64.9):  # cutoffs 0 s .. 4.9 s: nothing has expired yet
+        assert removed(deriver.on_frame(frame(t_s, flags=REGIME_HOLONOMY_SPIKE))) == []
+    assert scanning.scans == 0
+    assert len(scanning) == live
+
+    # Everything but the statics and the open band expires, each overlay exactly once.
+    ops = deriver.on_frame(frame(120.0, flags=REGIME_HOLONOMY_SPIKE))
+    ids = removed(ops)
+    assert len(ids) == len(set(ids)) == 2500
+    assert scanning.scans == 0
+    assert removed(deriver.on_frame(frame(121.0, flags=REGIME_HOLONOMY_SPIKE))) == []
+    assert [o["id"] for o in deriver.overlays()] == [o["id"] for o in EXPECTED_INITIAL] + ["band.holonomy.1"]
+
+
+def test_eviction_removes_only_what_expired():
+    deriver = OverlayDeriver(ASSET, START_MS, window_s=60)
+    feed(deriver, [
+        quote(ASSET, 30.0, 99.0, 100.0, flags=FLAG_ERROR_317),  # marker.reset.1, expires after 90 s
+        frame(10.0, flags=REGIME_FRAGMENTED), frame(20.0),  # band.fragmented.1 closes at 20 s
+        quote(ASSET, 5.0, 99.0, 100.0, flags=FLAG_ERROR_317),  # marker.reset.2 (out of order: 5 s)
+    ])
+    # cutoff 25 s: the band (end 20 s) and the 5 s marker go, the 30 s marker stays.
+    assert sorted(removed(deriver.on_frame(frame(85.0)))) == ["band.fragmented.1", "marker.reset.2"]
+    # cutoff 35 s: the 30 s marker goes.
+    assert removed(deriver.on_frame(frame(95.0))) == ["marker.reset.1"]
+
+
 def test_default_window_keeps_a_full_session():
     deriver = OverlayDeriver(ASSET, START_MS)
     feed(deriver, [frame(5.0, flags=REGIME_FRAGMENTED), frame(10.0), frame(23_000.0)])

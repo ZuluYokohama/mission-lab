@@ -27,19 +27,24 @@ with `t >= now - 300 s`, excluding the current sample. A window with no samples,
 deriver's first frame and the cooldown is 30 s from the edge's previous marker; both are
 inclusive, so a surge exactly at 60 s or exactly 30 s after the last marker can fire.
 Samples are recorded on every frame, during warm-up and cooldown too. Each edge keeps
-rolling sums (count, sum, sum of squares) beside its samples, so a frame costs O(touching
-edges).
+rolling sums (count, sum, sum of squares) beside its samples, so the surge test costs
+O(touching edges) per frame.
 
 Eviction. `on_frame` drops stored points older than `newest frame ms - window_s * 1000`,
 and removes closed bands ending before that cutoff and markers before it (an
 `overlay.remove` each). Static specs and open bands stay. Ids of removed overlays are not
 reused. Ops from one `on_frame` come in this order: bands, curl markers, points, removes.
+A min-heap of `(expiry ms, push order, id)` is fed when a marker is created (expiry
+`time_ms`) and when a band closes (expiry `end_ms`), so a frame pops only the entries that
+expired: O(log n) per expired overlay plus O(1) for the rest, never a scan of the live
+overlays. Removes come in expiry order. An id is pushed once, when it becomes evictable.
 """
 
+import heapq
 import math
 from collections import deque
 from collections.abc import Callable
-from itertools import chain
+from itertools import chain, count
 from typing import Any, NamedTuple
 
 from stonx_chart.feed.records import (
@@ -189,6 +194,8 @@ class OverlayDeriver:
         }
         self._counts: dict[str, int] = {}
         self._open_bands: dict[str, str] = {}  # band kind -> id of its open band
+        self._expiry: list[tuple[int, int, str]] = []  # heap of (expiry ms, push order, overlay id)
+        self._pushes = count()
         self._first_frame_ms: int | None = None
         self._newest_frame_ms = 0
         self._vwap_notional = 0.0
@@ -262,14 +269,20 @@ class OverlayDeriver:
             })]
         if not active and open_id is not None:
             del self._open_bands[band.kind]
+            self._schedule_expiry(ms, open_id)
             return [self._store({**self._overlays[open_id], "end_ms": ms})]
         return []
 
     def _add_marker(self, kind: str, ms: int, position: str, shape: str, color: str, text: str) -> Op:
+        marker_id = self._next_id(f"marker.{kind}")
+        self._schedule_expiry(ms, marker_id)
         return self._store({
-            "id": self._next_id(f"marker.{kind}"), "kind": "marker", "group": "events", "pane": "price",
+            "id": marker_id, "kind": "marker", "group": "events", "pane": "price",
             "time_ms": ms, "position": position, "shape": shape, "color": color, "text": text,
         })
+
+    def _schedule_expiry(self, expiry_ms: int, overlay_id: str) -> None:
+        heapq.heappush(self._expiry, (expiry_ms, next(self._pushes), overlay_id))
 
     def _curl_surges(self, ms: int, warmed_up: bool, norms: list[float]) -> list[Op]:
         ops: list[Op] = []
@@ -293,14 +306,12 @@ class OverlayDeriver:
             while series.t and series.t[0] < cutoff_ms:
                 series.t.popleft()
                 series.v.popleft()
-        expired = [
-            spec["id"] for spec in self._overlays.values()
-            if (spec["kind"] == "band" and spec["end_ms"] is not None and spec["end_ms"] < cutoff_ms)
-            or (spec["kind"] == "marker" and spec["time_ms"] < cutoff_ms)
-        ]
-        for overlay_id in expired:
-            del self._overlays[overlay_id]
-        return [{"type": "overlay.remove", "id": overlay_id} for overlay_id in expired]
+        ops: list[Op] = []
+        while self._expiry and self._expiry[0][0] < cutoff_ms:
+            _, _, overlay_id = heapq.heappop(self._expiry)
+            if self._overlays.pop(overlay_id, None) is not None:
+                ops.append({"type": "overlay.remove", "id": overlay_id})
+        return ops
 
     # ---- series points ------------------------------------------------------------------
 
