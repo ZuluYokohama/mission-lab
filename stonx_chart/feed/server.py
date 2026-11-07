@@ -19,7 +19,6 @@ and after an overflow a new snapshot, again followed by a `status`. Standard lib
 import argparse
 import json
 import math
-import mimetypes
 import re
 import select
 import socket
@@ -54,8 +53,9 @@ _MAX_DISCARD_BYTES = 1 << 20  # the largest request body read and thrown away be
 _NS_PER_S = 1_000_000_000
 _DURATION = re.compile(r"(?:([0-9]+)h)?(?:([0-9]+)m)?(?:([0-9]+)s)?")
 
-# Windows maps `.js` through the registry, and the registry may say text/plain.
-_FORCED_CONTENT_TYPES = {
+# A fixed table, not `mimetypes`: the host database varies (the Windows registry may map
+# `.js` to text/plain, and Linux /etc/mime.types maps `.xyz` to chemical/x-xyz).
+_CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript",
     ".css": "text/css",
@@ -96,8 +96,7 @@ def _resolve_static(static_dir: Path, url_path: str) -> Path | None:
 
 
 def _content_type(path: Path) -> str:
-    forced = _FORCED_CONTENT_TYPES.get(path.suffix.lower())
-    return forced or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return _CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
 
 
 class _Handler(BaseHTTPRequestHandler):
