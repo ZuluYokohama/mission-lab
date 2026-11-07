@@ -177,7 +177,7 @@ def test_assets_independent(): ...  # trades on 2 and 4 → each asset's bars co
 - Produces: `Op = dict[str, Any]`, the wire payload without an envelope:
   - `{"type": "overlay.upsert", "overlay": {...}}`
   - `{"type": "overlay.remove", "id": str}`
-  - `{"type": "series.points", "id": str, "t": [int], "v": [float]}` (one point per op)
+  - `{"type": "series.points", "id": str, "points": {"t": [int], "v": [float]}}` (one point per op)
 - `class OverlayDeriver`: `__init__(self, asset: int, session_start_ms: int, window_s: int = 23_400)`
   - `initial_ops(self) -> list[Op]`: upserts, in this order:
     - `pane.lambda2` (group `lambda2`, title `λ₂`, height_px 120, order 1)
@@ -388,14 +388,15 @@ def test_snapshot_600_covers_every_overlay_kind(): ...  # overlay ids include ba
   - `SeriesSpec {kind:'series', style:'line'|'area'|'histogram'|'step', color, width, agg: Agg, precision}`
   - `LevelSpec {kind:'level', value, color, label, dash}`
   - `OverlaySpec` (union of the five); `BarCols {t,o,h,l,c,vol: number[]}`; `PointCols {t,v: number[]}`; `Envelope {v:1, source:string, seq:number}`
-  - `StreamMessage`: discriminated union on `type`, with the payloads exactly as in Task 5 (`overlay.upsert` has `overlay: OverlaySpec`; `status` has an optional `message`)
+  - `StreamMessage`: discriminated union on `type`, with the payloads exactly as in Task 5 (`overlay.upsert` has `overlay: OverlaySpec`; `series.points` has `id` and `points: PointCols`, with no top-level `t` or `v`; `status` has an optional `message`)
 - **Produces (`decode.ts`):** `type DecodeResult = {ok:true; message: StreamMessage; ignoredOverlays: number} | {ok:false; reason:'malformed'|'ignored'|'incompatible'; detail:string}` and `decodeMessage(raw: string): DecodeResult`. Rules, checked in this order:
   1. Unparseable, or not an object → malformed.
-  2. `v !== 1` → incompatible.
-  3. Unknown `type` → ignored.
-  4. `overlay.upsert` with an unknown `kind` → ignored.
-  5. In a snapshot, unknown-kind overlays are removed and counted in `ignoredOverlays`.
-  6. Any wrong field type, out-of-enum value, non-finite number, non-integer time, or columns of unequal length → malformed.
+  2. A `series.points` message with top-level `t` or `v` arrays → malformed (checked before the version, because a flat `v` array is not a version).
+  3. `v !== 1` → incompatible.
+  4. Unknown `type` → ignored.
+  5. `overlay.upsert` with an unknown `kind` → ignored.
+  6. In a snapshot, unknown-kind overlays are removed and counted in `ignoredOverlays`.
+  7. Any wrong field type, out-of-enum value, non-finite number, non-integer time, or columns of unequal length → malformed.
 - **Produces (`tests/fixtures.ts`):** `loadFixtureMessages(name: string): string[]`. Reads `../../fixtures/wire/<name>` relative to the test file. A JSON array yields each element re-stringified; an object yields one string.
 
 - [ ] **Step 1: Scaffold.** Create the config files, run the npm installs, and add the `.gitignore` lines. Expected: `npm run typecheck` exits 0.
@@ -403,11 +404,11 @@ def test_snapshot_600_covers_every_overlay_kind(): ...  # overlay ids include ba
 
 ```ts
 test('decodes every fixture message', () => { for (const n of ['nvda_snapshot_300s.json','nvda_stream_300_600s.json','nvda_snapshot_600s.json']) for (const raw of loadFixtureMessages(n)) expect(decodeMessage(raw)).toMatchObject({ ok: true, ignoredOverlays: 0 }) })
-test('malformed inputs', () => { for (const raw of ['nope', '[]', '{"v":1,"type":"heartbeat","source":"x"}' /* no seq */]) expect(decodeMessage(raw)).toMatchObject({ ok: false, reason: 'malformed' }) })
+test('malformed inputs', () => { for (const raw of ['nope', '[]', '{"v":1,"type":"heartbeat","source":"x"}' /* no seq */, '{"v":[1],"type":"series.points","source":"x","seq":1,"id":"a","t":[1]}' /* flat points */]) expect(decodeMessage(raw)).toMatchObject({ ok: false, reason: 'malformed' }) })
 test('wrong version is incompatible', () => expect(decodeMessage(hb({ v: 2 }))).toMatchObject({ ok: false, reason: 'incompatible' }))
 test('unknown type and kind are ignored', () => { expect(decodeMessage(msg({ type: 'wat' }))).toMatchObject({ reason: 'ignored' }); expect(decodeMessage(upsert({ kind: 'cloud' }))).toMatchObject({ reason: 'ignored' }) })
 test('snapshot drops unknown overlay kinds', () => { const r = decodeMessage(snapshotWith([{ ...validBand, kind: 'cloud' }, validBand])); expect(r).toMatchObject({ ok: true, ignoredOverlays: 1 }); expect((r as any).message.overlays).toHaveLength(1) })
-test('enum and shape violations', () => { expect(decodeMessage(upsert({ ...validMarker, position: 'left' })).ok).toBe(false); expect(decodeMessage(upsert({ ...validSeries, agg: 'median' })).ok).toBe(false); expect(decodeMessage(points({ t: [1000], v: [] })).ok).toBe(false); expect(decodeMessage(snapshotWithBars({ t: [1000], o: [] })).ok).toBe(false) })
+test('enum and shape violations', () => { expect(decodeMessage(upsert({ ...validMarker, position: 'left' })).ok).toBe(false); expect(decodeMessage(upsert({ ...validSeries, agg: 'median' })).ok).toBe(false); expect(decodeMessage(points({ points: { t: [1000], v: [] } })).ok).toBe(false); expect(decodeMessage(snapshotWithBars({ t: [1000], o: [] })).ok).toBe(false) })
 test('status message optional', () => expect(decodeMessage(status({ feed_state: 'ok', drop_count: 0 })).ok).toBe(true))
 ```
 
@@ -539,7 +540,7 @@ test('trimBefore', () => { /* points, closed band ending before cutoff, marker b
   - After `connectionOpened()`, the first message sets the expected seq. Afterward, `seq !== expected` increments `gaps`.
   - `snapshot` resets both stores, adds `droppedHeld` to `ignored`, and marks a full reset.
   - `bar` → `applyBar`; `'stale'` increments `stale`.
-  - `series.points` → `appendPoints`; `rejected` is added to `ignored`.
+  - `series.points` → `appendPoints(id, msg.points.t, msg.points.v)`; `rejected` is added to `ignored`.
   - An upsert result of `'ignored'` increments `ignored`.
   - `status` sets `feedState`, `dropCount` and `statusMessage`.
   - After bars or points, if the last time minus the first time (across both stores) exceeds `1.1 × windowMs`, both stores `trimBefore(last − windowMs)` and a full reset is marked.

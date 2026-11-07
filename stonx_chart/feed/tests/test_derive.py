@@ -58,6 +58,11 @@ def point_ops(ops, series_id):
     return [op for op in ops if op["type"] == "series.points" and op["id"] == series_id]
 
 
+def point_cols(op):
+    """The `(t, v)` columns of a `series.points` op."""
+    return op["points"]["t"], op["points"]["v"]
+
+
 def feed(deriver, records):
     """Dispatch records to the deriver and return every emitted op in order."""
     ops = []
@@ -282,9 +287,11 @@ def test_points_reduce_by_agg():
         frame(0.7, lam=0.1, alpha=alpha_with(0, (1.0, 0.0, 0.0, 0.0))),
     ])
     lam = point_ops(ops, "series.lambda2")
-    assert [(p["t"], p["v"]) for p in lam] == [([START_MS], [0.3]), ([START_MS], [0.1])]
+    assert [point_cols(p) for p in lam] == [([START_MS], [0.3]), ([START_MS], [0.1])]
+    # The arrays are nested so that no payload key collides with the envelope's `v`.
+    assert lam[0] == {"type": "series.points", "id": "series.lambda2", "points": {"t": [START_MS], "v": [0.3]}}
     star = point_ops(ops, "series.star_curl")
-    assert [(p["t"], p["v"]) for p in star] == [([START_MS], [2.0]), ([START_MS], [2.0])]
+    assert [point_cols(p) for p in star] == [([START_MS], [2.0]), ([START_MS], [2.0])]
     points = deriver.points()
     assert points["series.lambda2"] == {"t": [START_MS], "v": [0.1]}
     assert points["series.star_curl"] == {"t": [START_MS], "v": [2.0]}
@@ -296,7 +303,7 @@ def test_star_curl_covers_touching_edges_only():
     alpha[edge_slice(1)] = (0.0, 4.0, 0.0, 0.0)
     alpha[edge_slice(10)] = (100.0, 0.0, 0.0, 0.0)  # edge 10 does not touch NVDA
     ops = deriver.on_frame(frame(0.0, alpha=tuple(alpha)))
-    assert point_ops(ops, "series.star_curl")[0]["v"] == [pytest.approx(5.0)]
+    assert point_ops(ops, "series.star_curl")[0]["points"]["v"] == [pytest.approx(5.0)]
 
 
 def test_bid_ask_ignore_trade_ticks_and_stay_finite():
@@ -309,11 +316,11 @@ def test_bid_ask_ignore_trade_ticks_and_stay_finite():
     ])
     bid = point_ops(ops, "series.bid")
     ask = point_ops(ops, "series.ask")
-    assert [(p["t"], p["v"]) for p in bid] == [([START_MS], [99.0]), ([START_MS + 1000], [99.5])]
-    assert [(p["t"], p["v"]) for p in ask] == [([START_MS], [100.0]), ([START_MS + 1000], [100.5])]
+    assert [point_cols(p) for p in bid] == [([START_MS], [99.0]), ([START_MS + 1000], [99.5])]
+    assert [point_cols(p) for p in ask] == [([START_MS], [100.0]), ([START_MS + 1000], [100.5])]
     for op in ops:
         if op["type"] == "series.points":
-            assert all(math.isfinite(v) for v in op["v"])
+            assert all(math.isfinite(v) for v in op["points"]["v"])
     json.dumps(ops, allow_nan=False)
     assert deriver.points()["series.bid"] == {"t": [START_MS, START_MS + 1000], "v": [99.0, 99.5]}
 
@@ -321,14 +328,14 @@ def test_bid_ask_ignore_trade_ticks_and_stay_finite():
 def test_non_finite_values_are_dropped():
     deriver = OverlayDeriver(ASSET, START_MS)
     ops = deriver.on_tick(quote(ASSET, 0.1, 99.0, math.nan))
-    assert [(p["id"], p["v"]) for p in point_ops(ops, "series.bid")] == [("series.bid", [99.0])]
+    assert [(p["id"], p["points"]["v"]) for p in point_ops(ops, "series.bid")] == [("series.bid", [99.0])]
     assert point_ops(ops, "series.ask") == []
     ops = deriver.on_frame(frame(0.2, lam=math.nan, alpha=alpha_with(0, (math.nan, 0.0, 0.0, 0.0))))
     assert [op for op in ops if op["type"] == "series.points"] == []
     json.dumps(deriver.points(), allow_nan=False)
     # A NaN sample must not poison later points ...
     ops = deriver.on_frame(frame(0.3, lam=0.2, alpha=alpha_with(0, (0.3, 0.0, 0.0, 0.0))))
-    assert point_ops(ops, "series.star_curl")[0]["v"] == [pytest.approx(0.3)]
+    assert point_ops(ops, "series.star_curl")[0]["points"]["v"] == [pytest.approx(0.3)]
     # ... or the surge statistics of the edge it came in on.
     nan_frame = frame(-0.1, alpha=alpha_with(0, (math.nan, 0.0, 0.0, 0.0)))
     markers, _ = run_curl(ASSET, [90.0], prefix=[nan_frame])
@@ -346,7 +353,7 @@ def test_vwap():
     deriver = OverlayDeriver(ASSET, START_MS)
     ops = feed(deriver, [last(ASSET, 0.5, 100.0, size=1.0), last(ASSET, 0.8, 102.0, size=3.0)])
     vwap = point_ops(ops, "series.vwap")
-    assert [(p["t"], p["v"]) for p in vwap] == [([START_MS], [100.0]), ([START_MS], [pytest.approx(101.5)])]
+    assert [point_cols(p) for p in vwap] == [([START_MS], [100.0]), ([START_MS], [pytest.approx(101.5)])]
     assert deriver.points()["series.vwap"]["v"] == [pytest.approx(101.5)]
     # Quotes do not move the VWAP.
     assert point_ops(deriver.on_tick(quote(ASSET, 1.0, 50.0, 51.0)), "series.vwap") == []
@@ -357,7 +364,7 @@ def test_vwap_covers_trades_since_session_start_with_size():
     assert point_ops(deriver.on_tick(last(ASSET, -5.0, 10.0, size=100.0)), "series.vwap") == []
     assert point_ops(deriver.on_tick(last(ASSET, 1.0, 100.0, size=0.0)), "series.vwap") == []
     ops = deriver.on_tick(last(ASSET, 2.0, 100.0, size=2.0))
-    assert point_ops(ops, "series.vwap")[0]["v"] == [pytest.approx(100.0)]
+    assert point_ops(ops, "series.vwap")[0]["points"]["v"] == [pytest.approx(100.0)]
 
 
 def test_overlays_and_points_snapshot():

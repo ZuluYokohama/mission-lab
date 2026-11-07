@@ -6,6 +6,10 @@ section 6), so key names and key order are fixed. A payload is a dict whose firs
 
     {"v": 1, "type": ..., "source": ..., "seq": n, <the payload's other keys, in order>}
 
+The envelope keys `v`, `type`, `source` and `seq` are reserved: a payload supplies `type` and
+must not use `v`, `source` or `seq` (`wrap` raises). A payload that carries arrays, such as a
+series' points, nests them under one key instead of using a top-level `v`.
+
 All times are integer milliseconds since the epoch. `encode_sse` refuses NaN and infinity
 (`allow_nan=False`), so a non-finite value fails loudly here instead of reaching the browser
 as invalid JSON. Standard library only.
@@ -20,6 +24,7 @@ from stonx_chart.feed.session import Bar
 
 SCHEMA_VERSION = 1
 SOURCE_SIMULATED = "SIMULATED_DEMO"
+_ENVELOPE_KEYS = frozenset({"v", "source", "seq"})  # `type` is the payload's own
 
 Payload = dict[str, Any]
 
@@ -82,7 +87,14 @@ class Envelope:
         self._seq = count(1)
 
     def wrap(self, payload: Payload) -> Payload:
-        """A new dict: `v`, `type`, `source`, `seq`, then the payload's other keys. Leaves `payload` as is."""
+        """A new dict: `v`, `type`, `source`, `seq`, then the payload's other keys. Leaves `payload` as is.
+
+        Raises ValueError, without using a `seq`, if the payload has a key of its own named `v`,
+        `source` or `seq`: it would silently replace the envelope's value.
+        """
+        clash = _ENVELOPE_KEYS.intersection(payload)
+        if clash:
+            raise ValueError(f"payload {payload['type']!r} uses reserved envelope keys: {sorted(clash)}")
         message: Payload = {
             "v": SCHEMA_VERSION,
             "type": payload["type"],

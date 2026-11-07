@@ -5,7 +5,10 @@ One `OverlayDeriver` serves one focus asset (design spec section 7.2). Its metho
 
     {"type": "overlay.upsert", "overlay": {...}}
     {"type": "overlay.remove", "id": str}
-    {"type": "series.points", "id": str, "t": [int], "v": [float]}   # exactly one point
+    {"type": "series.points", "id": str, "points": {"t": [int], "v": [float]}}   # exactly one point
+
+The point's arrays are nested under `points`, like a snapshot's `points` columns, because the
+envelope reserves the top-level keys `v`, `type`, `source` and `seq`.
 
 Overlay ids, groups, labels and colors are a contract with the TypeScript client. Colors
 are semantic tokens only. Text never carries trade-direction wording. Every value in an op
@@ -327,7 +330,7 @@ class OverlayDeriver:
         else:
             series.t.append(t)
             series.v.append(value)
-        return [{"type": "series.points", "id": series_id, "t": [t], "v": [series.v[-1]]}]
+        return [{"type": "series.points", "id": series_id, "points": {"t": [t], "v": [series.v[-1]]}}]
 
     def _add_vwap_point(self, ms: int, t: int, tick: TickRecord) -> list[Op]:
         size = tick.size_scaled / SIZE_SCALE

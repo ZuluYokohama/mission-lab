@@ -46,9 +46,10 @@ def _slot_key(payload: Payload) -> Hashable | None:
 
 
 def _time_of(payload: Payload) -> int:
-    """`t` of a bar, or of a one-point `series.points` (where `t` is a one-item list)."""
-    t = payload["t"]
-    return t[-1] if isinstance(t, list) else t
+    """`t` of a bar, or of a one-point `series.points` (where `points["t"]` is a one-item list)."""
+    if payload["type"] == "series.points":
+        return payload["points"]["t"][-1]
+    return payload["t"]
 
 
 class ClientChannel:

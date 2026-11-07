@@ -269,22 +269,24 @@ def test_stream_delivers_live_updates_in_sequence(hub, serve):
     stop = threading.Event()
     pump = threading.Thread(target=run_pump, args=(hub, SimClock(START_NS + 30 * S, 20.0), stop))
     with open_stream(port) as response:
-        seqs = [next_message(response)["seq"], next_message(response)["seq"]]
+        messages = [next_message(response), next_message(response)]
         pump.start()
         try:
-            seen: set[str] = set()
             for _ in range(300):
-                message = next_message(response)
-                seqs.append(message["seq"])
-                seen.add(message["type"])
-                if {"bar", "series.points"} <= seen:
+                messages.append(next_message(response))
+                if {"bar", "series.points"} <= {m["type"] for m in messages}:
                     break
-            assert {"bar", "series.points"} <= seen
+            assert {"bar", "series.points"} <= {m["type"] for m in messages}
         finally:
             stop.set()
             pump.join(5.0)
         assert not pump.is_alive()
-    assert seqs == list(range(1, len(seqs) + 1))
+    assert [m["seq"] for m in messages] == list(range(1, len(messages) + 1))
+    assert {m["v"] for m in messages} == {1}  # no payload key may replace the envelope's version
+    points = next(m for m in messages if m["type"] == "series.points")
+    assert list(points) == ["v", "type", "source", "seq", "id", "points"]
+    assert list(points["points"]) == ["t", "v"]
+    assert [len(points["points"]["t"]), len(points["points"]["v"])] == [1, 1]
 
 
 def test_stream_resyncs_after_overflow(hub, serve, monkeypatch):

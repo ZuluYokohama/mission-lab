@@ -23,7 +23,7 @@ def bar_msg(t: int, c: float = 1.0) -> dict:
 
 
 def points_msg(series_id: str, t: int, v: float = 1.0) -> dict:
-    return {"type": "series.points", "id": series_id, "t": [t], "v": [v]}
+    return {"type": "series.points", "id": series_id, "points": {"t": [t], "v": [v]}}
 
 
 def upsert_msg(overlay_id: str, n: int = 0) -> dict:
@@ -74,7 +74,7 @@ def apply_messages(state: tuple[dict, dict, dict], messages: list[dict]) -> None
         elif m["type"] == "overlay.remove":
             overlays.pop(m["id"], None)
         elif m["type"] == "series.points":
-            points[m["id"]].update(zip(m["t"], m["v"]))
+            points[m["id"]].update(zip(m["points"]["t"], m["points"]["v"]))
 
 
 class SpySource:
@@ -128,7 +128,7 @@ def test_snapshot_then_only_own_asset():
         assert m == ref_bars[m["t"]]
     for m in points:
         series = dict(zip(ref_points[m["id"]]["t"], ref_points[m["id"]]["v"]))
-        assert series[m["t"][0]] == m["v"][0]
+        assert series[m["points"]["t"][0]] == m["points"]["v"][0]
 
 
 def test_frames_reach_every_channel_but_ticks_only_their_own_asset():

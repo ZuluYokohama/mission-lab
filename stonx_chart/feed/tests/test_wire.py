@@ -40,6 +40,23 @@ def test_envelope_keeps_payload_key_order_and_leaves_payload_untouched():
     assert payload == before
 
 
+def test_envelope_keeps_its_version_on_a_series_points_message():
+    payload = {"type": "series.points", "id": "series.bid", "points": {"t": [1000], "v": [1.5]}}
+    message = Envelope(SOURCE_SIMULATED).wrap(payload)
+    assert list(message) == ["v", "type", "source", "seq", "id", "points"]
+    assert message["v"] == 1
+    assert message["points"] == {"t": [1000], "v": [1.5]}
+
+
+@pytest.mark.parametrize("key", ["v", "source", "seq"])
+def test_envelope_rejects_a_payload_that_reuses_an_envelope_key(key):
+    envelope = Envelope(SOURCE_SIMULATED)
+    payload = {"type": "series.points", "id": "series.bid", key: [1]}
+    with pytest.raises(ValueError, match=key):
+        envelope.wrap(payload)
+    assert envelope.wrap(heartbeat_payload(0))["seq"] == 1  # the failed wrap did not use a seq
+
+
 def test_each_envelope_counts_its_own_seq():
     a, b = Envelope(SOURCE_SIMULATED), Envelope(SOURCE_SIMULATED)
     assert [a.wrap(heartbeat_payload(0))["seq"] for _ in range(3)] == [1, 2, 3]

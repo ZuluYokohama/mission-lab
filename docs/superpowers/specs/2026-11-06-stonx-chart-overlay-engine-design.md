@@ -106,9 +106,11 @@ Each SSE event's data is one JSON object:
 | `bar` | `t, o, h, l, c, vol` | Upsert by `t`. The live bar repeats its `t` |
 | `overlay.upsert` | one overlay spec | A spec with an existing `id` replaces it entirely |
 | `overlay.remove` | `id` | |
-| `series.points` | `id`, `t[]`, `v[]` | Appends. The final `t` may equal the last stored `t` to update the live point |
+| `series.points` | `id`, `points` (`{t: [], v: []}`) | Appends. The final `t` may equal the last stored `t` to update the live point |
 | `heartbeat` | `now_ms` | Every 1 s |
 | `status` | `feed_state` (`ok` or `degraded`), `drop_count`, optional `message` | Sent on change |
+
+Payload keys never reuse the envelope keys `v`, `type`, `source` or `seq`.
 
 The server coalesces live-bar and live-point updates into latest-value slots flushed every 50 ms (at most 20 per second). Overlay upserts and removes are delivered in order without coalescing.
 
