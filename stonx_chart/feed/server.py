@@ -316,11 +316,24 @@ def _run(args: argparse.Namespace, backfill_s: int, history_s: int) -> int:
     now_ns = time.time_ns()
     start_ns = (now_ns - backfill_s * _NS_PER_S) // _NS_PER_S * _NS_PER_S
     hub = StreamHub(MockFeedSource(args.seed, start_ns), start_ns, window_s=history_s)
-    hub.pump(now_ns)
+    # Bind first: a taken port must fail at once, not after the backfill. Nothing is served until
+    # `serve_forever`, so a client that connects meanwhile just waits in the listen queue.
     try:
         server = make_server(hub, args.host, args.port, STATIC_DIR)
     except OSError as e:
         return _fail(f"cannot listen on {args.host}:{args.port}: {e}", code=1)
+    try:
+        hub.pump(now_ns)
+    except BaseException:
+        server.server_close()
+        raise
+    if not (STATIC_DIR / "index.html").is_file():
+        print(
+            "warning: web/dist not built - run npm run build in stonx_chart/web "
+            "(the API still works; the page will 404)",
+            file=sys.stderr,
+            flush=True,
+        )
     stop = threading.Event()
     pump = threading.Thread(
         target=run_pump, args=(hub, SimClock(now_ns, args.speed), stop), name="feed-pump", daemon=True

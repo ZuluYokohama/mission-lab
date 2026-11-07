@@ -522,11 +522,41 @@ def test_main_rejects_bad_arguments_before_building_anything(no_source, capsys, 
     assert capsys.readouterr().err.startswith("error: ")
 
 
-def test_main_reports_a_port_that_is_taken(hub, serve, capsys):
+def test_main_reports_a_port_that_is_taken_before_any_backfill(hub, serve, capsys, monkeypatch):
     port = serve(hub)
-    assert main(["--backfill", "0s", "--port", str(port)]) == 1
+
+    def no_backfill(self, until_ns):
+        raise AssertionError("main ran the backfill before it bound the port")
+
+    monkeypatch.setattr(StreamHub, "pump", no_backfill)
+    assert main(["--backfill", "6h", "--port", str(port)]) == 1
     err = capsys.readouterr().err
     assert err.startswith("error: ") and str(port) in err
+
+
+class _StoppedServer:
+    """Stands in for the server in `main`: serves nothing and 'stops' at once (as Ctrl-C would)."""
+
+    server_address = ("127.0.0.1", 0)
+
+    def serve_forever(self) -> None:
+        raise KeyboardInterrupt
+
+    def server_close(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize("built", [False, True])
+def test_main_warns_on_stderr_when_the_web_app_is_not_built(tmp_path, capsys, monkeypatch, built):
+    if built:
+        (tmp_path / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    monkeypatch.setattr(server_module, "STATIC_DIR", tmp_path)
+    monkeypatch.setattr(server_module, "make_server", lambda *args, **kwargs: _StoppedServer())
+    assert main(["--backfill", "0s", "--port", "0"]) == 0
+    captured = capsys.readouterr()
+    assert ("web/dist not built" in captured.err) is (not built)
+    assert "npm run build" in captured.err or built
+    assert "StonX chart feed" in captured.out
 
 
 def test_cli_serves_the_feed():
