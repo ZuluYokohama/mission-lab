@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +24,13 @@ describe("third-party-licenses.txt", () => {
     expect(text).toContain(read("node_modules/lightweight-charts/LICENSE"));
     expect(text).toContain("Copyright (c) 2019 TradingView, Inc");
     expect(text).toContain("The above copyright notice and this permission notice shall be included in all");
+  });
+
+  test("ends with the complete MIT section", () => {
+    // From "MIT License" to the end: the standard MIT text with fancy-canvas's upstream
+    // copyright line. A pinned digest, so a dropped grant or warranty paragraph fails.
+    const mit = text.slice(text.indexOf("MIT License\n"));
+    expect(createHash("sha256").update(mit).digest("hex")).toBe("4ef9ad68ec0a251ea26e699f0647d756885a5750dce74a0aeabcbc50c8255249");
   });
 
   test("is linked from the page", () => expect(read("index.html")).toContain('href="/third-party-licenses.txt"'));
