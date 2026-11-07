@@ -169,3 +169,78 @@ describe("OverlayStore", () => {
     expect(s.markers().map((m) => m.id)).toEqual(["keep"]);
   });
 });
+
+describe("OverlayStore non-copying reads", () => {
+  const mean = (id: string): SeriesSpec => ({ ...series(id), agg: "mean" });
+
+  test("seriesData aggregates the series' own points with its agg", () => {
+    const s = new OverlayStore();
+    s.upsert(mean("m"));
+    s.appendPoints("m", [T0, T0 + 1000, T0 + 4000, T0 + 5000], [1, 2, 3, 10]);
+    expect(s.seriesData("m", 5)).toEqual([{ t: T0, v: 2 }, { t: T0 + 5000, v: 10 }]);
+    expect(s.seriesData("m", 1)).toHaveLength(4);
+    expect(s.seriesData("nope", 5)).toEqual([]);
+  });
+
+  test("seriesData of a held series is empty", () => {
+    const s = new OverlayStore();
+    s.upsert(series("h", "pane.missing"));
+    s.appendPoints("h", [T0], [1]);
+    expect(s.seriesData("h", 1)).toEqual([]);
+    expect(s.seriesBucketValue("h", 1, T0)).toBeUndefined();
+  });
+
+  test("seriesBucketValue folds one bucket and follows a spec replace", () => {
+    const s = new OverlayStore();
+    s.upsert(mean("m"));
+    s.appendPoints("m", [T0, T0 + 1000, T0 + 4000, T0 + 5000], [1, 2, 3, 10]);
+    expect(s.seriesBucketValue("m", 5, T0)).toBe(2);
+    expect(s.seriesBucketValue("m", 5, T0 + 5000)).toBe(10);
+    expect(s.seriesBucketValue("m", 5, T0 + 10_000)).toBeUndefined();
+    expect(s.seriesBucketValue("nope", 5, T0)).toBeUndefined();
+    s.appendPoints("m", [T0 + 20_000], [4]);
+    expect(s.seriesBucketValue("m", 5, T0 + 10_000)).toBeUndefined(); // empty bucket before the last point
+    expect(s.seriesBucketValue("m", 5, T0 + 5000)).toBe(10);
+    s.upsert({ ...mean("m"), agg: "max" });
+    expect(s.seriesBucketValue("m", 5, T0)).toBe(3);
+  });
+
+  test("reads track later appends (no stale copy)", () => {
+    const s = new OverlayStore();
+    s.upsert(series("x"));
+    s.appendPoints("x", [T0], [1]);
+    expect(s.seriesBucketValue("x", 60, T0)).toBe(1);
+    s.appendPoints("x", [T0 + 1000], [7]);
+    expect(s.seriesBucketValue("x", 60, T0)).toBe(7);
+    expect(s.seriesExtent("x")).toEqual({ first: T0, last: T0 + 1000 });
+  });
+
+  test("seriesExtent", () => {
+    const s = new OverlayStore();
+    s.upsert(series("x"));
+    expect(s.seriesExtent("x")).toBeNull();
+    expect(s.seriesExtent("nope")).toBeNull();
+    s.appendPoints("x", [T0, T0 + 9000], [1, 2]);
+    expect(s.seriesExtent("x")).toEqual({ first: T0, last: T0 + 9000 });
+  });
+
+  test("kindOf covers applied and held specs", () => {
+    const s = new OverlayStore();
+    s.upsert(pane("p"));
+    s.upsert(series("held", "pane.missing"));
+    s.upsert(band("b", T0, null));
+    expect(s.kindOf("p")).toBe("pane");
+    expect(s.kindOf("held")).toBe("series");
+    expect(s.kindOf("b")).toBe("band");
+    expect(s.kindOf("nope")).toBeUndefined();
+    expect(s.kindOf("__proto__")).toBeUndefined();
+  });
+
+  test("bands accepts a spec filter", () => {
+    const s = new OverlayStore();
+    s.upsert(band("a", T0, null, "price", "g1"));
+    s.upsert(band("b", T0, null, "price", "g2"));
+    expect(s.bands(1, (b) => b.group !== "g1").map((b) => b.id)).toEqual(["b"]);
+    expect(s.bands(1).map((b) => b.id)).toEqual(["a", "b"]);
+  });
+});

@@ -5,7 +5,19 @@
  */
 import type { BandSpec, LevelSpec, MarkerSpec, OverlaySpec, PaneSpec, PointCols, SeriesSpec } from "../protocol/types";
 import type { IntervalSec } from "../time";
-import { bandRender, type BandRender } from "./bucket";
+import { aggregatePoints, bandRender, bucketValue, type BandRender, type Point } from "./bucket";
+
+/** First index of ascending `t` whose value is `>= x` (t.length if none). */
+function lowerBound(t: number[], x: number): number {
+  let lo = 0;
+  let hi = t.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (t[mid]! < x) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
 
 export type UpsertOutcome = "applied" | "held" | "ignored";
 
@@ -111,8 +123,13 @@ export class OverlayStore {
     return this.ofKind<LevelSpec>("level");
   }
 
-  bands(interval: IntervalSec): BandRender[] {
-    return this.ofKind<BandSpec>("band").map((b) => bandRender(b, interval));
+  /** Applied bands bucketed at `interval`, optionally only those whose spec passes `include`. */
+  bands(interval: IntervalSec, include?: (spec: BandSpec) => boolean): BandRender[] {
+    const out: BandRender[] = [];
+    for (const spec of this.applied.values()) {
+      if (spec.kind === "band" && (include === undefined || include(spec))) out.push(bandRender(spec, interval));
+    }
+    return out;
   }
 
   markers(): MarkerSpec[] {
@@ -123,6 +140,47 @@ export class OverlayStore {
   points(id: string): PointCols | undefined {
     const cols = this.pts.get(id);
     return cols ? { t: cols.t.slice(), v: cols.v.slice() } : undefined;
+  }
+
+  /**
+   * Bucketed data of an applied series at `interval`, read straight from the stored columns (no copy of
+   * the raw points). Empty for an unknown or held series.
+   */
+  seriesData(id: string, interval: IntervalSec): Point[] {
+    const spec = this.applied.get(id);
+    const cols = this.pts.get(id);
+    if (spec?.kind !== "series" || !cols) return [];
+    return aggregatePoints(cols, interval, spec.agg);
+  }
+
+  /**
+   * Value of one bucket of an applied series; undefined when it has no points there. The live (last)
+   * bucket folds in place in O(points in bucket); an older bucket is located by binary search and only
+   * its own points are copied.
+   */
+  seriesBucketValue(id: string, interval: IntervalSec, bucketMs: number): number | undefined {
+    const spec = this.applied.get(id);
+    const cols = this.pts.get(id);
+    if (spec?.kind !== "series" || !cols) return undefined;
+    const endMs = bucketMs + interval * 1000;
+    const n = cols.t.length;
+    if (n === 0 || cols.t[n - 1]! < endMs) return bucketValue(cols, interval, spec.agg, bucketMs);
+    const lo = lowerBound(cols.t, bucketMs);
+    const hi = lowerBound(cols.t, endMs);
+    if (lo === hi) return undefined;
+    return bucketValue({ t: cols.t.slice(lo, hi), v: cols.v.slice(lo, hi) }, interval, spec.agg, bucketMs);
+  }
+
+  /** First and last point time of one series (applied or held), or null when it has no points. */
+  seriesExtent(id: string): { first: number; last: number } | null {
+    const cols = this.pts.get(id);
+    if (!cols || cols.t.length === 0) return null;
+    return { first: cols.t[0]!, last: cols.t[cols.t.length - 1]! };
+  }
+
+  /** Kind of the applied or held spec with this id. */
+  kindOf(id: string): OverlaySpec["kind"] | undefined {
+    return (this.applied.get(id) ?? this.held.get(id))?.kind;
   }
 
   /** Earliest and latest point time over all applied series, or null when there are no points. */
