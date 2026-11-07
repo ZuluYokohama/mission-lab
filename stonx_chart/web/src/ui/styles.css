@@ -1,0 +1,213 @@
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1f2937;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --control-bg: #f3f4f6;
+  --accent: #1d4ed8;
+  --accent-fg: #ffffff;
+  --banner-source-bg: #fef3c7;
+  --banner-source-fg: #78350f;
+  --banner-warn-bg: #ffedd5;
+  --banner-warn-fg: #7c2d12;
+  --banner-error-bg: #fee2e2;
+  --banner-error-fg: #7f1d1d;
+  --state-live: #16a34a;
+  --state-warn: #d97706;
+  --state-bad: #dc2626;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f172a;
+    --fg: #e2e8f0;
+    --muted: #94a3b8;
+    --border: #1e293b;
+    --control-bg: #1e293b;
+    --accent: #60a5fa;
+    --accent-fg: #0f172a;
+    --banner-source-bg: #451a03;
+    --banner-source-fg: #fde68a;
+    --banner-warn-bg: #431407;
+    --banner-warn-fg: #fed7aa;
+    --banner-error-bg: #450a0a;
+    --banner-error-fg: #fecaca;
+    --state-live: #22c55e;
+    --state-warn: #fbbf24;
+    --state-bad: #f87171;
+  }
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+#toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+select,
+button {
+  font: inherit;
+  color: var(--fg);
+  background: var(--control-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.jump-live {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.legend-item[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
+.legend-item[aria-pressed="false"] {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.banners {
+  display: flex;
+  flex-direction: column;
+}
+
+.banner {
+  padding: 5px 10px;
+  font-weight: 600;
+}
+
+.banner-source {
+  background: var(--banner-source-bg);
+  color: var(--banner-source-fg);
+  letter-spacing: 0.02em;
+}
+
+.banner-warn {
+  background: var(--banner-warn-bg);
+  color: var(--banner-warn-fg);
+}
+
+.banner-error {
+  background: var(--banner-error-bg);
+  color: var(--banner-error-fg);
+}
+
+#chart-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+#chart {
+  position: absolute;
+  inset: 0;
+}
+
+.readout {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  z-index: 3;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  font-variant-numeric: tabular-nums;
+  white-space: pre;
+  pointer-events: none;
+}
+
+.status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.status-conn {
+  font-weight: 600;
+}
+
+/* Static in index.html; the status bar appends its fields before it via `order`. */
+.status-licenses {
+  order: 1;
+  margin-left: auto;
+  color: inherit;
+}
+
+.status-conn[data-state="live"] {
+  color: var(--state-live);
+}
+
+.status-conn[data-state="stale"],
+.status-conn[data-state="reconnecting"],
+.status-conn[data-state="connecting"] {
+  color: var(--state-warn);
+}
+
+.status-conn[data-state="incompatible"],
+.status-conn[data-state="closed"] {
+  color: var(--state-bad);
+}

@@ -11,3 +11,6 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+node_modules/
+stonx_chart/web/test-results/
+stonx_chart/web/playwright-report/

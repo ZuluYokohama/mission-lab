@@ -1,0 +1,28 @@
+{
+  "name": "stonx-chart-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "e2e": "vite build && playwright test --grep-invert @perf",
+    "perf": "vite build && playwright test --grep @perf"
+  },
+  "dependencies": {
+    "fancy-canvas": "2.1.0",
+    "lightweight-charts": "5.2.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.0",
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6",
+    "vitest": "^5.1.0"
+  }
+}
