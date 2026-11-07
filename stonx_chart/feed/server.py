@@ -1,6 +1,7 @@
 """Loopback HTTP server and command line of the StonX chart feed.
 
-The server binds `127.0.0.1` only and answers GET only (every other method gets 405):
+The server binds `127.0.0.1` only and answers GET only (every other method gets 405). A GET
+whose `Host` header is not `127.0.0.1` or `localhost` (with any port) gets 421:
 
     GET /api/stream?asset=SYM   server-sent events of one asset: a snapshot, then live updates
     GET /api/health             {"source": ..., "feed_state": ...}
@@ -52,6 +53,7 @@ _TAKE_TIMEOUT_S = 0.25  # a writer checks its client and the heartbeat clock thi
 _MAX_DISCARD_BYTES = 1 << 20  # the largest request body read and thrown away before a 405
 _NS_PER_S = 1_000_000_000
 _DURATION = re.compile(r"(?:([0-9]+)h)?(?:([0-9]+)m)?(?:([0-9]+)s)?")
+_LOOPBACK_HOST_HEADER = re.compile(r"(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?", re.IGNORECASE)
 
 # A fixed table, not `mimetypes`: the host database varies (the Windows registry may map
 # `.js` to text/plain, and Linux /etc/mime.types maps `.xyz` to chemical/x-xyz).
@@ -60,6 +62,7 @@ _CONTENT_TYPES = {
     ".js": "text/javascript",
     ".css": "text/css",
     ".svg": "image/svg+xml",
+    ".txt": "text/plain; charset=utf-8",
 }
 
 
@@ -106,6 +109,11 @@ class _Handler(BaseHTTPRequestHandler):
         pass  # a health poller would fill the console; unexpected errors still reach stderr
 
     def do_GET(self) -> None:
+        # A loopback bind alone does not stop DNS rebinding: a page can point its own hostname
+        # at 127.0.0.1 and read this server as same-origin. Its requests still carry that name.
+        if not _LOOPBACK_HOST_HEADER.fullmatch(self.headers.get("Host") or ""):
+            self._send_json(HTTPStatus.MISDIRECTED_REQUEST, {"error": "host not allowed"})
+            return
         url = urlsplit(self.path)
         if url.path == "/api/stream":
             self._stream(parse_qs(url.query).get("asset", [""])[0])

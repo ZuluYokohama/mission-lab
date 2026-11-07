@@ -32,6 +32,15 @@ def test_non_last_ticks_ignored():
     assert s.bars(2) == []
 
 
+def test_non_finite_price_rejected():
+    s = SessionStore()
+    s.apply_tick(last(2, 0.1, 100.0))
+    for price in (float("nan"), float("inf"), float("-inf")):
+        assert s.apply_tick(last(2, 0.5, price)) is None  # same second: no update
+        assert s.apply_tick(last(2, 1.5, price)) is None  # next second: no new bar
+    assert s.bars(2) == [Bar(START_MS, 100.0, 100.0, 100.0, 100.0, 1.0)]
+
+
 def test_older_tick_rejected():
     s = SessionStore()
     s.apply_tick(last(2, 5.0, 100.0))

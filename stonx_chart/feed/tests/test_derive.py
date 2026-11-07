@@ -541,6 +541,19 @@ def test_no_buy_sell_text(mock_run):
     assert not [t for t in texts if re.search(r"buy|sell", t, re.IGNORECASE)]
 
 
+def test_mock_baseline_noise_curl_markers_are_pinned(mock_run):
+    """The mock's unclipped baseline noise fires curl-surge markers before any scheduled spike.
+
+    No curl spike can start before 90 s (edge 0's first occurrence, jitter >= 0), so every
+    marker up to then comes from noise. This is a known limitation of the surge rule on the
+    mock; the count is pinned so a change to the rule or the noise model shows up here.
+    """
+    ops, _ = mock_run
+    noise = [o for o in upserts(ops)
+             if o["id"].startswith("marker.curl.") and o["time_ms"] < START_MS + 90_000]
+    assert len(noise) == 36
+
+
 def test_mock_run_ops_are_wire_safe(mock_run):
     ops, final = mock_run
     json.dumps(ops, allow_nan=False)

@@ -16,6 +16,7 @@ from stonx_chart.feed.records import (
     SignalFrame,
     TickRecord,
     asset_id,
+    edge_slice,
 )
 from stonx_chart.feed.sources import (
     FRAGMENTED_THRESHOLD,
@@ -23,8 +24,6 @@ from stonx_chart.feed.sources import (
     STEP_NS,
     MockFeedSource,
     SimClock,
-    _CURL,
-    _Schedule,
 )
 
 S = 1_000_000_000
@@ -143,12 +142,17 @@ def test_nvda_events_in_first_600s(recs_600, frames_600):
         assert any(f.regime_flags & bit for f in frames_600), f"no frame with regime bit {bit:#x}"
 
 
+def test_regime_flag_thresholds_match_plan():
+    assert (FRAGMENTED_THRESHOLD, HIGH_CURL_THRESHOLD) == (0.05, 1.5)
+
+
 def test_regime_flags_consistent(frames_600):
+    # Literals from the plan, not the module's constants, so a changed constant fails here.
     for f in frames_600:
         expected = 0
-        if f.fiedler_lambda < FRAGMENTED_THRESHOLD:
+        if f.fiedler_lambda < 0.05:
             expected |= REGIME_FRAGMENTED
-        if math.hypot(*f.alpha_coexact) > HIGH_CURL_THRESHOLD:
+        if math.hypot(*f.alpha_coexact) > 1.5:
             expected |= REGIME_HIGH_CURL
         if any(x != 0.0 for x in f.b_harm):
             expected |= REGIME_HOLONOMY_SPIKE
@@ -158,18 +162,47 @@ def test_regime_flags_consistent(frames_600):
     assert len(quiet) > 0.8 * len(frames_600)
 
 
-def test_high_curl_holds_through_every_spike():
-    recs = MockFeedSource(7, START).advance(START + 1200 * S)
-    frames = [r for r in recs if isinstance(r, SignalFrame)]
-    spikes = [_Schedule(7, _CURL, e) for e in range(len(EDGES))]
+def spiked_edges(f):
+    """Edges whose norm is at least the 1.6 spike floor; baseline edge norms sit near 0.2.
+
+    Read from the emitted values, not from the mock's schedule, so a wrong schedule cannot
+    move the expectation along with the spikes.
+    """
+    return [e for e in range(len(EDGES)) if math.hypot(*f.alpha_coexact[edge_slice(e)]) >= 1.6]
+
+
+@pytest.fixture(scope="module")
+def frames_1200():
+    return [r for r in MockFeedSource(7, START).advance(START + 1200 * S) if isinstance(r, SignalFrame)]
+
+
+def test_high_curl_holds_through_every_spike(frames_1200):
     inside = 0
-    for f in frames:
-        t_ns = f.epoch_ns - START
-        in_spike = any(s.active(t_ns) for s in spikes)
+    for f in frames_1200:
+        in_spike = bool(spiked_edges(f))
         inside += in_spike
-        assert bool(f.regime_flags & REGIME_HIGH_CURL) == in_spike, f"frame {f.sequence} at {t_ns / S:.1f} s"
+        t_s = (f.epoch_ns - START) / S
+        assert bool(f.regime_flags & REGIME_HIGH_CURL) == in_spike, f"frame {f.sequence} at {t_s:.1f} s"
     # Every edge spikes twice in 1200 s (about 20 frames per spike), so the check is not vacuous.
     assert inside >= 18 * 2 * 15
+
+
+def test_curl_spikes_follow_the_planned_schedule(frames_1200):
+    # Plan: edge e's spike n starts at 90 + 23 * e + 600 * n s, plus a jitter in [0, 20] s, and
+    # lasts 2 s.
+    starts: dict[int, list[float]] = {e: [] for e in range(len(EDGES))}
+    previous: set[int] = set()
+    for f in frames_1200:
+        current = set(spiked_edges(f))
+        for e in current - previous:
+            starts[e].append((f.epoch_ns - START) / S)
+        previous = current
+    for e, edge_starts in starts.items():
+        assert len(edge_starts) == 2, f"edge {e}: {edge_starts}"
+        for n, t_s in enumerate(edge_starts):
+            planned = 90 + 23 * e + 600 * n
+            # The first frame of a spike is at most one 0.1 s step after its exact start.
+            assert planned <= t_s <= planned + 20 + 0.1, f"edge {e} spike {n} at {t_s} s"
 
 
 def test_bharm_zero_without_holonomy_flag(frames_600):

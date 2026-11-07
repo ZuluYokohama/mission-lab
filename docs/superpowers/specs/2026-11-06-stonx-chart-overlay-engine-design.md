@@ -1,7 +1,7 @@
 # StonX Chart & Overlay Engine — Design
 
 **Date:** 2026-11-06
-**Status:** Approved design, pending implementation plan
+**Status:** Implemented in PR 15, pending maintainer review. The section 12 criteria 1–3 are not yet met in `npm run perf`.
 **Location:** new top-level directory `stonx_chart/`
 
 ## 1. Goal
@@ -173,7 +173,7 @@ Overlay text never contains trade-direction instructions such as BUY or SELL.
 
 ## 9. Mock feed and server
 
-- **`MockFeedSource(seed, start_ms, speed)`** is deterministic: the same seed and start produce byte-identical output.
+- **`MockFeedSource(seed, start_ns)`** is deterministic for a given seed, start and platform. `SimClock` owns the speed. Prices and signal values are rounded to reduce last-bit math-library differences between platforms. That does not guarantee byte-identical output across platforms, and CI checks the golden fixtures on ubuntu and windows.
   - **Prices:** each asset's return = market factor + sector factor (index ETFs, semis, megacap tech) + idiosyncratic noise. Bid/ask spreads of a few basis points. At least one LAST trade per asset per second.
   - **Signals:** frames at 10 Hz. `fiedler_lambda` is a mean-reverting walk with occasional dips below 0.05. `alpha_coexact` is 72 values with occasional single-edge surges. `ols_betas` and `fiedler_vec` are filled with plausible bounded values. `regime_flags` follows the values: Fragmented (0x1) while `fiedler_lambda < 0.05`, High Curl (0x2) while total ‖α_coexact‖₂ exceeds a fixed mock threshold.
   - **Holonomy:** `b_harm` is all zeros, matching the documented `dim H¹ = 0` structure, except during rare scheduled "corruption" windows. In those windows `b_harm` carries non-zero energy and Holonomy Spike (0x4) is set, so the `HOLONOMY_SPIKE` band can be exercised.
@@ -202,6 +202,7 @@ Overlay text never contains trade-direction instructions such as BUY or SELL.
 | Client queue over 2,000 messages | Server clears that queue and sends a fresh `snapshot` |
 | Source exception | `status` with `feed_state: degraded` and a message; heartbeats continue |
 | Non-loopback bind | Refuse at startup with non-zero exit |
+| `Host` header other than `127.0.0.1` or `localhost` (DNS rebinding) | 421 |
 | Non-GET request | 405 |
 
 ## 11. Testing
@@ -230,6 +231,8 @@ Overlay text never contains trade-direction instructions such as BUY or SELL.
 **CI:** a new `stonx_chart` job on ubuntu-latest and windows-latest runs `python -B -m pytest stonx_chart/feed/tests`, `npm ci`, Vitest, `vite build` and Playwright. `node_modules/` is added to `.gitignore` (`dist/` is already ignored).
 
 ## 12. Success criteria
+
+Current status: criteria 1–3 are not yet met in `npm run perf`. It misses the new-bar-to-paint p95, pan p95 and interval-switch budgets. The asset-switch budget passes.
 
 1. A tick reaches the screen within 100 ms over loopback (at most 50 ms of server coalescing plus one frame).
 2. Pan and zoom hold 60 fps with 23,400 1-second bars and all v1 overlays visible.

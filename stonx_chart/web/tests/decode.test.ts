@@ -66,5 +66,17 @@ describe("decodeMessage", () => {
     expect(decodeMessage(snapshotWithBars({ ...goodBars, vol: [] }))).toMatchObject({ ok: false, reason: "malformed", detail: expect.stringContaining("unequal length") });
   });
 
+  test("snapshot times must be strictly ascending", () => {
+    const twoBars = { t: [1000, 2000], o: [1, 1], h: [2, 2], l: [0.5, 0.5], c: [1.5, 1.5], vol: [10, 10] };
+    expect(decodeMessage(snapshotWithBars(twoBars)).ok).toBe(true);
+    for (const t of [[2000, 1000], [1000, 1000]])
+      expect(decodeMessage(snapshotWithBars({ ...twoBars, t }))).toMatchObject({ ok: false, reason: "malformed", detail: expect.stringContaining("snapshot.bars.t[1]") });
+    expect(decodeMessage(snapshot({ points: { "series.a": { t: [1000, 2000], v: [1, 2] } } })).ok).toBe(true);
+    for (const t of [[2000, 1000], [1000, 1000]])
+      expect(decodeMessage(snapshot({ points: { "series.a": { t, v: [1, 2] } } }))).toMatchObject({ ok: false, reason: "malformed", detail: expect.stringContaining("snapshot.points[series.a].t[1]") });
+    // Live point messages keep their order rules in the store.
+    expect(decodeMessage(points({ points: { t: [2000, 1000], v: [1, 2] } })).ok).toBe(true);
+  });
+
   test("status message optional", () => expect(decodeMessage(status({ feed_state: "ok", drop_count: 0 })).ok).toBe(true));
 });

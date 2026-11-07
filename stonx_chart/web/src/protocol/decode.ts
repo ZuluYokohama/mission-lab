@@ -134,11 +134,19 @@ function overlay(x: unknown, path: string): OverlaySpec {
   return o as unknown as OverlaySpec;
 }
 
+/** Snapshot columns seed the stores whole, and the stores and the chart need ascending times. */
+function strictlyAscending(t: number[], path: string): void {
+  for (let i = 1; i < t.length; i++) {
+    if (!(t[i]! > t[i - 1]!)) fail(`${path}[${i}]`, "times must be strictly ascending");
+  }
+}
+
 function barCols(x: unknown, path: string): void {
   const o = obj(x, path);
   const cols: Record<string, number[]> = { t: numArray(o, "t", path, true) };
   for (const k of ["o", "h", "l", "c", "vol"]) cols[k] = numArray(o, k, path, false);
   sameLength(cols, path);
+  strictlyAscending(cols.t!, `${path}.t`);
 }
 
 /** Validates the payload of a known `type`. Returns the number of overlays dropped (snapshots only). */
@@ -165,7 +173,10 @@ function validate(m: Obj, type: string): { message: StreamMessage; ignoredOverla
         else kept.push(overlay(x, path));
       });
       const points = obj(m.points, "snapshot.points");
-      for (const [id, cols] of Object.entries(points)) pointCols(cols, `snapshot.points[${id}]`);
+      // A `series.points` message may repeat or reorder times: `OverlayStore.appendPoints` sorts that out.
+      for (const [id, cols] of Object.entries(points)) {
+        strictlyAscending(pointCols(cols, `snapshot.points[${id}]`).t, `snapshot.points[${id}].t`);
+      }
       return { message: { ...m, overlays: kept } as unknown as StreamMessage, ignoredOverlays: ignored };
     }
     case "bar":

@@ -3,6 +3,7 @@
 Standard library only.
 """
 
+import math
 from collections import deque
 from dataclasses import dataclass
 
@@ -32,10 +33,11 @@ class SessionStore:
     def apply_tick(self, tick: TickRecord) -> Bar | None:
         """Fold a LAST tick into its bar and return the updated bar.
 
-        Returns None for any other tick type, and for a LAST tick older than the asset's
+        Returns None for any other tick type, for a LAST tick with a non-finite price (the
+        wire encoder refuses NaN and infinity), and for a LAST tick older than the asset's
         newest bar (counted in `stale_ticks`).
         """
-        if tick.tick_type != TICK_LAST:
+        if tick.tick_type != TICK_LAST or not math.isfinite(tick.price):
             return None
         t_ms = (tick.epoch_ns // 1_000_000_000) * 1000
         vol = tick.size_scaled / SIZE_SCALE

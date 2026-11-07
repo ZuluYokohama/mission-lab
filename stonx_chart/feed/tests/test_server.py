@@ -201,6 +201,29 @@ def test_health(hub, serve):
     assert json.loads(response.body) == {"source": "SIMULATED_DEMO", "feed_state": "ok"}
 
 
+def fetch_with_host(port: int, path: str, host: str):
+    with closing(http.client.HTTPConnection("127.0.0.1", port, timeout=5.0)) as conn:
+        conn.request("GET", path, headers={"Host": host})
+        response = conn.getresponse()
+        response.body = response.read()
+        return response
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost:5173", "LOCALHOST:8765"])
+def test_loopback_host_headers_are_served(hub, serve, host):
+    assert fetch_with_host(serve(hub), "/api/health", host).status == 200
+
+
+@pytest.mark.parametrize(
+    "host", ["evil.example", "evil.example:8765", "127.0.0.1.evil.example", "localhost:x", "[::1]:8765", ""]
+)
+@pytest.mark.parametrize("path", ["/api/health", "/api/stream?asset=NVDA", "/"])
+def test_other_host_headers_get_421(hub, serve, host, path):
+    response = fetch_with_host(serve(hub), path, host)
+    assert response.status == 421
+    assert json.loads(response.body) == {"error": "host not allowed"}
+
+
 def test_health_reports_a_degraded_feed(serve):
     degraded = StreamHub(FailingSource(), START_NS)
     degraded.pump(START_NS + S)

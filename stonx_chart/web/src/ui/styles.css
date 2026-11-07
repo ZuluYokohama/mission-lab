@@ -190,6 +190,13 @@ select:focus-visible {
   font-weight: 600;
 }
 
+/* Static in index.html; the status bar appends its fields before it via `order`. */
+.status-licenses {
+  order: 1;
+  margin-left: auto;
+  color: inherit;
+}
+
 .status-conn[data-state="live"] {
   color: var(--state-live);
 }
