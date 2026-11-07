@@ -63,9 +63,11 @@ export async function startFeed(o: FeedOptions): Promise<Feed> {
     });
   });
 
-  /** Kills the child and its descendants (a Windows venv python.exe can be a launcher whose child lives on). */
+  /** True while the child has not exited; a pid is only safe to signal until then (afterwards it may be reused). */
+  const running = (): boolean => !exited && child.exitCode === null && child.signalCode === null;
+  /** Kills a running child and its descendants (a Windows venv python.exe can be a launcher whose child lives on). */
   const killTree = (): void => {
-    if (child.pid === undefined) return;
+    if (child.pid === undefined || !running()) return;
     if (process.platform === "win32") spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
     else child.kill("SIGKILL");
   };
@@ -80,10 +82,10 @@ export async function startFeed(o: FeedOptions): Promise<Feed> {
 
   const stop = async (): Promise<void> => {
     if (process.platform === "win32") killTree(); // child.kill() would leave a launcher's child holding the port
-    else if (!exited) child.kill();
+    else if (running()) child.kill();
     await Promise.race([exit, sleep(5_000)]);
-    // Escalate if the process is still around or the port is still held.
-    if (!exited || !(await portClosed(5_000))) {
+    // Escalate if the process is still around or the port is still held (killTree only acts on a running child).
+    if (running() || !(await portClosed(5_000))) {
       killTree();
       await Promise.race([exit, sleep(5_000)]);
     }
@@ -94,7 +96,6 @@ export async function startFeed(o: FeedOptions): Promise<Feed> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (exited) {
-      killTree(); // a launcher may have exited while its child lives on
       throw new Error(`feed exited before becoming healthy${spawnError ? `: ${spawnError}` : ""}\n--- feed stderr ---\n${stderr}`);
     }
     if (await healthy(url)) return { url, stop };
