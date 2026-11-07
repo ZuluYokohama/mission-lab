@@ -34,6 +34,8 @@ export function formatAge(ms: number | null): string {
   return `${Math.round(age / 60_000)} min`;
 }
 
+/** `precision` comes from a server spec, so it is clamped to what `toFixed` accepts rather than trusted. */
 export function formatNumber(v: number, precision: number): string {
-  return Number.isFinite(v) ? v.toFixed(precision) : "—";
+  const digits = Math.min(20, Math.max(0, Math.trunc(Number.isFinite(precision) ? precision : 0)));
+  return Number.isFinite(v) ? v.toFixed(digits) : "—";
 }

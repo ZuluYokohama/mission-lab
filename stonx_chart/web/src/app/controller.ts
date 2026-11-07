@@ -27,7 +27,7 @@ export interface Counters {
 
 export interface Readout {
   bar: Bar | null;
-  values: { id: string; group: string; value: number }[];
+  values: { id: string; group: string; value: number; precision: number }[];
 }
 
 export interface ControllerState {
@@ -225,7 +225,7 @@ export class ChartController {
     const values: Readout["values"] = [];
     for (const [id, spec] of this.renderedSeries) {
       const value = this.overlays.seriesBucketValue(id, this.interval, b);
-      if (value !== undefined) values.push({ id, group: spec.group, value });
+      if (value !== undefined) values.push({ id, group: spec.group, value, precision: spec.precision });
     }
     return bar === null && values.length === 0 ? null : { bar, values };
   }

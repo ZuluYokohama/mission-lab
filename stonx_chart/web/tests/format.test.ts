@@ -25,4 +25,7 @@ test("formatNumber", () => {
   expect(formatNumber(1.23456, 2)).toBe("1.23");
   expect(formatNumber(100, 0)).toBe("100");
   expect(formatNumber(Number.NaN, 2)).toBe("—");
+  expect(formatNumber(1.5, 150)).toBe((1.5).toFixed(20)); // out-of-range precision is clamped, not thrown
+  expect(formatNumber(1.5, -3)).toBe("2");
+  expect(formatNumber(1.234, 1.9)).toBe("1.2");
 });

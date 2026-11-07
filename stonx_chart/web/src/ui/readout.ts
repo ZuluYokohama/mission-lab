@@ -34,7 +34,7 @@ export function createReadout(
         `Vol ${formatNumber(b.vol, 0)}`,
       );
     }
-    for (const v of r.values) parts.push(`${v.id} ${formatNumber(v.value, 3)}`);
+    for (const v of r.values) parts.push(`${v.id} ${formatNumber(v.value, v.precision)}`);
     const text = parts.join("  ");
     if (text !== shown) {
       shown = text;

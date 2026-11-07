@@ -410,7 +410,7 @@ describe("ChartController", () => {
     expect(fake.series.has("series.bid")).toBe(false);
     expect(c.readoutAt(T0 + 3500)).toEqual({
       bar: { t: T0, o: 10, h: 15, l: 2, c: 13, vol: 200 },
-      values: [{ id: "series.lambda2", group: "lambda2", value: 0.5 }],
+      values: [{ id: "series.lambda2", group: "lambda2", value: 0.5, precision: 2 }],
     });
     expect(c.readoutAt(T0 + 5000)).toEqual({ bar: bar(T0 + 5000), values: [] });
     expect(c.readoutAt(T0 + 60_000)).toBeNull();
