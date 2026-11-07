@@ -56,6 +56,10 @@ test("recovers after server restart", async ({ page }) => {
   await setInterval(page, "5");
   await page.getByTestId("asset-select").selectOption("AMD");
   await expect(chartOf(page)).toHaveAttribute("data-asset", "AMD");
+  const lambda2 = page.getByTestId("legend-item").and(page.locator('[data-group="lambda2"]'));
+  await expect(lambda2).toHaveAttribute("aria-pressed", "true");
+  await lambda2.click();
+  await expect(lambda2).toHaveAttribute("aria-pressed", "false");
 
   await feed!.stop();
   await expect(page.getByTestId("stale-banner")).toBeVisible({ timeout: 5_000 });
@@ -65,6 +69,8 @@ test("recovers after server restart", async ({ page }) => {
   await expect(chartOf(page)).toHaveAttribute("data-asset", "AMD");
   await expect(chartOf(page)).toHaveAttribute("data-interval", "5");
   await expect.poll(() => barCount(page)).toBeGreaterThan(0);
+  // The hidden group stays hidden across the reconnect's fresh snapshot.
+  await expect(lambda2).toHaveAttribute("aria-pressed", "false");
 });
 
 test("legend toggle persists across reload", async ({ page }) => {
