@@ -15,6 +15,7 @@
     "perf": "vite build && playwright test --grep @perf"
   },
   "dependencies": {
+    "fancy-canvas": "2.1.0",
     "lightweight-charts": "5.2.1"
   },
   "devDependencies": {

@@ -8,6 +8,8 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
+    // Keep the bundled libraries' license headers (lightweight-charts is Apache-2.0) in the output.
+    rolldownOptions: { output: { comments: { legal: true } } },
   },
   test: {
     include: ["tests/**/*.test.ts"],

@@ -13,10 +13,11 @@ The original local excerpt hashes remain as historical metadata. New archived ha
 
 # Bundled dependencies
 
-The StonX chart (`stonx_chart/web`) bundles one runtime dependency into its built page. Unlike the references above, this is distributed code, used under its own license.
+The StonX chart (`stonx_chart/web`) bundles two runtime dependencies into its built page (`fancy-canvas` is a dependency of `lightweight-charts`, and the chart's band drawing uses its types). Unlike the references above, this is distributed code, used under its own license.
 
 | Dependency | Version | License | Copyright |
 |---|---|---|---|
 | [lightweight-charts](https://github.com/tradingview/lightweight-charts) | `5.2.1` (pinned exactly) | Apache-2.0 | Copyright 2023 TradingView, Inc. |
+| [fancy-canvas](https://github.com/tradingview/fancy-canvas) | `2.1.0` (pinned exactly) | MIT | Copyright (c) 2019 TradingView, Inc |
 
-The copyright line is copied from the `LICENSE` file shipped in the `lightweight-charts` 5.2.1 package. The chart keeps the library's attribution logo enabled (`layout.attributionLogo: true`) and it must stay enabled.
+The `lightweight-charts` copyright line is copied from the `LICENSE` file shipped in the 5.2.1 package. The `fancy-canvas` 2.1.0 npm package declares MIT in its `package.json` but does not ship a `LICENSE` file, so its copyright line is copied from the `LICENSE` file in the upstream repository. The production build keeps the libraries' license header comments in the bundled JavaScript (`build.rolldownOptions.output.comments.legal` in `stonx_chart/web/vite.config.ts`). The chart keeps the library's attribution logo enabled (`layout.attributionLogo: true`) and it must stay enabled.
