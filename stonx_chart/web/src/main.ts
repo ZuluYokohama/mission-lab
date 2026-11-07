@@ -87,6 +87,7 @@ function renderChartAttrs(asset: string | null, interval: IntervalSec, barCount:
   set("data-bar-count", String(barCount));
   set("data-interval", String(interval));
   set("data-asset", asset ?? "");
+  set("data-pane-count", String(surface.paneCount()));
 }
 
 // Each distinct error is logged once, so a persistent failure cannot spam the console per frame.

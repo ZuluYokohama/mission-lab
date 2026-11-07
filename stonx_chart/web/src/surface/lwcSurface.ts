@@ -49,6 +49,8 @@ import type { ChartSurface, VisibleRange } from "./types";
 
 export interface LwcSurface extends ChartSurface {
   setScheme(s: Scheme): void;
+  /** Number of chart panes other than the price pane (read-only; a test hook). */
+  paneCount(): number;
 }
 
 export interface LwcSurfaceOptions {
@@ -349,6 +351,10 @@ class LwcChartSurface implements LwcSurface {
     this.syncLevels(true);
     this.applyMarkers();
     for (const slot of this.bandSlots.values()) slot.prim.setBands(slot.bands, s);
+  }
+
+  paneCount(): number {
+    return Math.max(0, this.chart.panes().length - 1);
   }
 
   destroy(): void {
