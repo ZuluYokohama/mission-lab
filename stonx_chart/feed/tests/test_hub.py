@@ -304,6 +304,34 @@ def test_source_error_degrades_and_recovers():
     assert any(m["type"] == "bar" for m in messages)
 
 
+def test_status_reads_state_and_message_under_the_hub_lock():
+    entered, release = threading.Event(), threading.Event()
+
+    class BlockingSource:
+        drop_count = 0
+
+        def advance(self, until_ns: int) -> list:
+            entered.set()
+            release.wait(5.0)
+            raise RuntimeError("boom")
+
+    hub = StreamHub(BlockingSource(), START_NS)
+    assert hub.status() == ("ok", None)
+    pumper = threading.Thread(target=hub.pump, args=(START_NS + S,))
+    pumper.start()
+    assert entered.wait(5.0)
+    result: list[tuple[str, str | None]] = []
+    reader = threading.Thread(target=lambda: result.append(hub.status()))
+    reader.start()
+    reader.join(0.1)
+    assert reader.is_alive()  # an unlocked read would have returned the stale pair at once
+    release.set()
+    for thread in (reader, pumper):
+        thread.join(5.0)
+        assert not thread.is_alive()
+    assert result == [("degraded", "RuntimeError: boom")]
+
+
 def test_status_is_offered_only_when_it_changes():
     spy = SpySource(
         MockFeedSource(7, START_NS),

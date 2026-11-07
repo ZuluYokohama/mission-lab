@@ -8,12 +8,12 @@ can never stall the hub (design spec sections 6 and 9).
 Threads. One pump thread calls `pump` then `flush_all` (every 50 ms in the server, the hub
 has no timer of its own), and each connection's writer thread calls `subscribe`, `take`,
 `resync` and `unsubscribe`. The hub lock serializes `pump`, `subscribe`, `resync`,
-`unsubscribe`, `snapshot`, `flush_all` and `channel_count`, so a snapshot and the channel
-registration happen between two pumps: the snapshot plus everything offered afterwards
+`unsubscribe`, `snapshot`, `flush_all`, `channel_count` and `status`, so a snapshot and the
+channel registration happen between two pumps: the snapshot plus everything offered afterwards
 reproduces the hub's state exactly. Each channel has its own lock and condition. The lock
 order is always hub, then channel. `feed_state` and `status_message` change only under the
 hub lock and may be read without it; each read is atomic, but the pair may be read between
-two updates.
+two updates (`status` returns a consistent pair).
 
 Payloads are shared, never copied: one dict can sit in several channels' queues, so nobody
 may change a payload after offering it. `Envelope.wrap` copies. Standard library only.
@@ -242,6 +242,11 @@ class StreamHub:
     def channel_count(self) -> int:
         with self._lock:
             return sum(len(channels) for channels in self._channels)
+
+    def status(self) -> tuple[str, str | None]:
+        """`feed_state` and `status_message` read together, so the pair is never torn between two updates."""
+        with self._lock:
+            return self.feed_state, self.status_message
 
     def _snapshot(self, asset: int) -> dict:
         if not 0 <= asset < len(ASSETS):
