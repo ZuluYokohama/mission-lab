@@ -60,10 +60,10 @@ describe("decodeMessage", () => {
   });
 
   test("enum and shape violations", () => {
-    expect(decodeMessage(upsert({ ...validMarker, position: "left" })).ok).toBe(false);
-    expect(decodeMessage(upsert({ ...validSeries, agg: "median" })).ok).toBe(false);
-    expect(decodeMessage(points({ points: { t: [1000], v: [] } })).ok).toBe(false);
-    expect(decodeMessage(snapshotWithBars({ t: [1000], o: [] })).ok).toBe(false);
+    expect(decodeMessage(upsert({ ...validMarker, position: "left" }))).toMatchObject({ ok: false, reason: "malformed", detail: expect.stringContaining("position") });
+    expect(decodeMessage(upsert({ ...validSeries, agg: "median" }))).toMatchObject({ ok: false, reason: "malformed", detail: expect.stringContaining("agg") });
+    expect(decodeMessage(points({ points: { t: [1000], v: [] } }))).toMatchObject({ ok: false, reason: "malformed", detail: expect.stringContaining("unequal length") });
+    expect(decodeMessage(snapshotWithBars({ ...goodBars, vol: [] }))).toMatchObject({ ok: false, reason: "malformed", detail: expect.stringContaining("unequal length") });
   });
 
   test("status message optional", () => expect(decodeMessage(status({ feed_state: "ok", drop_count: 0 })).ok).toBe(true));
