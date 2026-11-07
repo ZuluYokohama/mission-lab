@@ -3,12 +3,13 @@ import { createErrorReporter, runFrame } from "./app/frameLoop";
 import { createLwcSurface } from "./surface/lwcSurface";
 import type { Scheme } from "./surface/theme";
 import type { IntervalSec } from "./time";
+import { streamRejected } from "./transport/assetProbe";
 import { StreamClient, type ConnState } from "./transport/streamClient";
 import { createBanners } from "./ui/banners";
 import { createControls } from "./ui/controls";
 import { formatTick, formatTime } from "./ui/format";
 import { createLegend } from "./ui/legend";
-import { loadPrefs, safeStorage, savePrefs, type Prefs } from "./ui/prefs";
+import { DEFAULT_PREFS, loadPrefs, safeStorage, savePrefs, type Prefs } from "./ui/prefs";
 import { createReadout } from "./ui/readout";
 import { createStatusBar } from "./ui/statusBar";
 import "./ui/styles.css";
@@ -38,9 +39,32 @@ darkQuery.addEventListener("change", (e) => surface.setScheme(schemeOf(e.matches
 const controller = new ChartController(surface, { interval: prefs.interval, hiddenGroups: prefs.hiddenGroups });
 
 let conn: ConnState = "connecting";
-const client = new StreamClient({
-  url: (a) => "/api/stream?asset=" + encodeURIComponent(a),
+const streamUrl = (a: string): string => "/api/stream?asset=" + encodeURIComponent(a);
+
+// A stored asset the feed does not know is refused (HTTP 400) forever. If the connection fails before
+// any snapshot has ever arrived, ask the feed whether it refuses that asset and, if so, fall back to
+// the default asset (once) and save it. A feed that is merely down is not a refusal.
+let snapshotSeen = false;
+let fellBack = false;
+let probing = false;
+function maybeFallBack(): void {
+  const stored = prefs.asset;
+  if (snapshotSeen || fellBack || probing || stored === DEFAULT_PREFS.asset) return;
+  probing = true;
+  void streamRejected(streamUrl(stored)).then((rejected) => {
+    probing = false;
+    if (!rejected || snapshotSeen || fellBack || prefs.asset !== stored) return;
+    fellBack = true;
+    prefs.asset = DEFAULT_PREFS.asset;
+    persist();
+    client.open(prefs.asset);
+  });
+}
+
+const client: StreamClient = new StreamClient({
+  url: streamUrl,
   onMessage: (m, ignoredOverlays) => {
+    if (m.type === "snapshot") snapshotSeen = true;
     controller.handle(m);
     for (let i = 0; i < ignoredOverlays; i++) controller.noteDecodeIssue("ignored");
   },
@@ -48,6 +72,7 @@ const client = new StreamClient({
   onState: (s) => {
     conn = s;
     surface.setDimmed(s === "stale" || s === "reconnecting");
+    if (s === "reconnecting") maybeFallBack();
   },
   onConnection: () => controller.connectionOpened(),
 });
