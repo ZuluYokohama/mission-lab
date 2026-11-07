@@ -324,7 +324,10 @@ class LwcChartSurface implements LwcSurface {
   }
 
   scrollToLive(): void {
-    this.chart.timeScale().scrollToRealTime();
+    // Not scrollToRealTime(): its 400 ms animation races with new bars. While the view is not at the
+    // live edge LWC shifts the right offset back by one per added bar, and the animation can end
+    // already behind the edge, leaving the chart (and the jump button) stuck in history.
+    this.chart.timeScale().scrollToPosition(0, false);
   }
 
   setDimmed(d: boolean): void {
