@@ -42,6 +42,8 @@ export interface ControllerState {
   statusMessage: string | null;
   lastMessageAtMs: number | null;
   barCount: number;
+  /** A copy of the decode/sequence counters (malformed, ignored, gaps, stale). */
+  counters: Counters;
 }
 
 export interface ControllerOptions {
@@ -241,6 +243,7 @@ export class ChartController {
       statusMessage: this.statusMessage,
       lastMessageAtMs: this.lastMessageAtMs,
       barCount: this.barBuckets.length,
+      counters: { ...this.counters },
     };
   }
 

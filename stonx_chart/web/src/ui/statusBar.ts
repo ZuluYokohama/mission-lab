@@ -1,4 +1,4 @@
-/** Bottom status bar: connection state, data age, source and dropped-message count. DOM only. */
+/** Bottom status bar: connection state, data age, source, decode counters and the server's dropped-message count. DOM only. */
 import type { ControllerState } from "../app/controller";
 import type { ConnState } from "../transport/streamClient";
 import { formatAge } from "./format";
@@ -23,6 +23,8 @@ export function createStatusBar(root: HTMLElement, h: StatusBarHandlers): { rend
   connEl.dataset.testid = "conn-state";
   const ageEl = cell(root, "status-age");
   const sourceEl = cell(root, "status-source");
+  const countsEl = cell(root, "status-counts");
+  countsEl.dataset.testid = "decode-counts";
   const dropEl = cell(root, "status-drops");
 
   return {
@@ -32,6 +34,8 @@ export function createStatusBar(root: HTMLElement, h: StatusBarHandlers): { rend
       const age = state.lastMessageAtMs === null ? null : h.now() - state.lastMessageAtMs;
       setText(ageEl, `data age ${formatAge(age)}`);
       setText(sourceEl, state.source ?? "");
+      const c = state.counters;
+      setText(countsEl, `malformed ${c.malformed} · ignored ${c.ignored} · gaps ${c.gaps} · stale ${c.stale}`);
       setText(dropEl, state.dropCount > 0 ? `${state.dropCount} dropped` : "");
     },
   };

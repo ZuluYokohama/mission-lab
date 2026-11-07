@@ -297,6 +297,8 @@ describe("ChartController", () => {
     c.noteDecodeIssue("malformed");
     c.noteDecodeIssue("ignored");
     expect(c.counters).toEqual({ malformed: 1, ignored: 4, gaps: 1, stale: 1 });
+    expect(c.state().counters).toEqual({ malformed: 1, ignored: 4, gaps: 1, stale: 1 });
+    expect(c.state().counters).not.toBe(c.counters); // a copy, not the live object
     c.flush();
     expect(fake.candles.map((x) => x.t)).toEqual(range(T0, 3));
 
