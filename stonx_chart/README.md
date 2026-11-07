@@ -35,10 +35,17 @@ Endpoints: `GET /api/stream?asset=SYM` (server-sent events: a snapshot on connec
 
 ## Develop the web app
 
-Start the feed on its default port, then the Vite dev server:
+Run the feed and the Vite dev server in two terminals.
+
+Terminal 1, from the repository root (the feed keeps running in the foreground):
 
 ```
 python -m stonx_chart.feed
+```
+
+Terminal 2:
+
+```
 cd stonx_chart/web
 npm ci
 npm run dev
@@ -60,9 +67,10 @@ python -m stonx_chart.feed
 
 ## Tests
 
-From the repository root:
+From the repository root, with a Python 3.12 virtual environment active (pytest is a development-only dependency; the feed itself needs nothing beyond the standard library):
 
 ```
+pip install -r requirements-dev.txt
 python -B -m pytest stonx_chart/feed/tests -q -p no:cacheprovider
 ```
 
