@@ -1,4 +1,5 @@
 import { ChartController } from "./app/controller";
+import { createErrorReporter, runFrame } from "./app/frameLoop";
 import { createLwcSurface } from "./surface/lwcSurface";
 import type { Scheme } from "./surface/theme";
 import type { IntervalSec } from "./time";
@@ -88,26 +89,39 @@ function renderChartAttrs(asset: string | null, interval: IntervalSec, barCount:
   set("data-asset", asset ?? "");
 }
 
-function renderAll(): void {
-  const state = controller.state();
-  renderChartAttrs(state.asset, state.interval, state.barCount);
-  controls.render(state, conn);
-  legend.render(state, conn);
-  readout.render(state, conn);
-  statusBar.render(state, conn);
-  banners.render(state, conn);
-}
-
-surface.onCrosshair((t) => readout.setCrosshair(t));
-surface.onViewChange(() => controls.render(controller.state(), conn));
+// Each distinct error is logged once, so a persistent failure cannot spam the console per frame.
+const report = createErrorReporter((e) => console.error("stonx_chart: frame step failed", e));
 
 function frame(): void {
-  controller.flush();
-  renderAll();
+  // Reschedule first: nothing below may stop the loop.
   requestAnimationFrame(frame);
+  let flushed = false;
+  runFrame(
+    [
+      () => {
+        controller.flush();
+        flushed = true;
+      },
+      // The data attributes describe a flush that was applied; skip them when it failed.
+      () => {
+        if (!flushed) return;
+        const s = controller.state();
+        renderChartAttrs(s.asset, s.interval, s.barCount);
+      },
+      () => controls.render(controller.state(), conn),
+      () => legend.render(controller.state(), conn),
+      () => readout.render(controller.state(), conn),
+      () => statusBar.render(controller.state(), conn),
+      () => banners.render(controller.state(), conn),
+    ],
+    report,
+  );
 }
 requestAnimationFrame(frame);
-window.setInterval(() => statusBar.render(controller.state(), conn), 1000);
+
+surface.onCrosshair((t) => runFrame([() => readout.setCrosshair(t)], report));
+surface.onViewChange(() => runFrame([() => controls.render(controller.state(), conn)], report));
+window.setInterval(() => runFrame([() => statusBar.render(controller.state(), conn)], report), 1000);
 window.addEventListener("pagehide", () => client.close());
 window.addEventListener("pageshow", (e) => {
   if (e.persisted) client.open(prefs.asset); // restored from the back/forward cache
