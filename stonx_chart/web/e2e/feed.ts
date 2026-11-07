@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -51,7 +51,8 @@ export async function startFeed(o: FeedOptions): Promise<Feed> {
   let exited = false;
   let spawnError: Error | null = null;
   const exit = new Promise<void>((resolve) => {
-    child.once("exit", () => {
+    // "close", not "exit": by then stderr has been fully read, so failure messages carry all of it.
+    child.once("close", () => {
       exited = true;
       resolve();
     });
@@ -62,20 +63,38 @@ export async function startFeed(o: FeedOptions): Promise<Feed> {
     });
   });
 
-  const stop = async (): Promise<void> => {
-    if (!exited) {
-      child.kill();
-      await Promise.race([exit, sleep(10_000)]);
+  /** Kills the child and its descendants (a Windows venv python.exe can be a launcher whose child lives on). */
+  const killTree = (): void => {
+    if (child.pid === undefined) return;
+    if (process.platform === "win32") spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
+    else child.kill("SIGKILL");
+  };
+  const portClosed = async (ms: number): Promise<boolean> => {
+    const until = Date.now() + ms;
+    while (Date.now() < until) {
+      if (!(await healthy(url))) return true;
+      await sleep(100);
     }
-    // Wait for the OS to release the port so a restart on the same port can bind it.
-    const deadline = Date.now() + 10_000;
-    while (Date.now() < deadline && (await healthy(url))) await sleep(100);
+    return !(await healthy(url));
+  };
+
+  const stop = async (): Promise<void> => {
+    if (process.platform === "win32") killTree(); // child.kill() would leave a launcher's child holding the port
+    else if (!exited) child.kill();
+    await Promise.race([exit, sleep(5_000)]);
+    // Escalate if the process is still around or the port is still held.
+    if (!exited || !(await portClosed(5_000))) {
+      killTree();
+      await Promise.race([exit, sleep(5_000)]);
+    }
+    if (!(await portClosed(10_000))) throw new Error(`feed on port ${o.port} still answers after being killed`);
   };
 
   const timeoutMs = o.healthTimeoutMs ?? 60_000;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (exited) {
+      killTree(); // a launcher may have exited while its child lives on
       throw new Error(`feed exited before becoming healthy${spawnError ? `: ${spawnError}` : ""}\n--- feed stderr ---\n${stderr}`);
     }
     if (await healthy(url)) return { url, stop };
