@@ -10,3 +10,13 @@ No upstream implementation code or verbatim README/JPL passage is distributed in
 | [JPL State Analysis](https://www.jpl.nasa.gov/work-with-us/technology-system/mds/system-engineering/) | Mutable official page; collection metadata in SOURCES.json | No redistribution license established; original quotation omitted |
 
 The original local excerpt hashes remain as historical metadata. New archived hashes identify release-authored notes, not copies of upstream passages. Design inspiration is not implementation verification, independent reproduction or institutional certification.
+
+# Bundled dependencies
+
+The StonX chart (`stonx_chart/web`) bundles one runtime dependency into its built page. Unlike the references above, this is distributed code, used under its own license.
+
+| Dependency | Version | License | Copyright |
+|---|---|---|---|
+| [lightweight-charts](https://github.com/tradingview/lightweight-charts) | `5.2.1` (pinned exactly) | Apache-2.0 | Copyright 2023 TradingView, Inc. |
+
+The copyright line is copied from the `LICENSE` file shipped in the `lightweight-charts` 5.2.1 package. The chart keeps the library's attribution logo enabled (`layout.attributionLogo: true`) and it must stay enabled.

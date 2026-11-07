@@ -19,7 +19,7 @@ A browser price chart for live monitoring of one StonX focus asset, with a decla
 | Data source (v1) | `MockFeedSource`, contract-shaped and deterministic; every message labeled `SIMULATED_DEMO` |
 | Primary use | Live monitoring during market hours (live edge first; no replay mode in v1) |
 | Renderer | TradingView Lightweight Charts 5.2.x behind a `ChartSurface` adapter |
-| Toolchain | TypeScript + Vite + Vitest + Playwright (Node 24 LTS); Python 3.12 standard library for the server |
+| Toolchain | TypeScript + Vite + Vitest + Playwright (Node 22 LTS or newer); Python 3.12 standard library for the server |
 | Transport | Server-sent events, snapshot on every connect |
 
 ## 3. Non-goals (v1)
