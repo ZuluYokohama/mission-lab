@@ -3,10 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
     <title>StonX Chart</title>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <header id="toolbar">
+        <div id="controls" class="controls"></div>
+        <div id="legend" class="legend" role="group" aria-label="Overlay groups"></div>
+      </header>
+      <div id="banners" class="banners"></div>
+      <main id="chart-wrap">
+        <div id="chart" data-testid="chart"></div>
+        <div id="readout" class="readout" aria-live="off"></div>
+      </main>
+      <footer id="status" class="status"></footer>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
